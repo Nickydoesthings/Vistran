@@ -4,6 +4,8 @@ import os
 import base64
 import requests
 from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtGui import QIcon
 from PIL import Image
 import mss
 import openai
@@ -348,6 +350,7 @@ class TranslatorApp(QtWidgets.QWidget):
 def main():
     logging.info("Starting Visual Translator application.")
     app = QtWidgets.QApplication(sys.argv)
+    app.setWindowIcon(QIcon('images/v-letter.svg'))
     translator = TranslatorApp()
     translator.show()
     sys.exit(app.exec_())
