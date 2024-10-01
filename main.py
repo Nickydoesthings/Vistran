@@ -60,9 +60,91 @@ class SelectionWindow(QtWidgets.QWidget):
     def __del__(self):
         logging.info("SelectionWindow instance deleted.")
 
+class TranslationDisplayWindow(QtWidgets.QWidget):
+    def __init__(self, text, rect):
+        super().__init__()
+
+        # Remove window decorations and make the window stay on top
+        self.setWindowFlags(
+            QtCore.Qt.WindowStaysOnTopHint |
+            QtCore.Qt.FramelessWindowHint
+        )
+
+        # Set window geometry to match the selected rectangle
+        self.setGeometry(rect)
+
+        # Set background color, border, and rounded corners
+        self.setStyleSheet("""
+            background-color: rgba(50, 50, 50, 220);
+            border: 2px solid #333333;
+            border-radius: 10px;
+        """)
+
+        # Add drop shadow effect
+        self.shadow = QtWidgets.QGraphicsDropShadowEffect(self)
+        self.shadow.setBlurRadius(15)
+        self.shadow.setXOffset(0)
+        self.shadow.setYOffset(0)
+        self.shadow.setColor(QtGui.QColor(0, 0, 0, 160))
+        self.setGraphicsEffect(self.shadow)
+
+        # Create a layout
+        layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # Create a close button with "X"
+        close_button = QtWidgets.QPushButton("X")
+        close_button.setFixedSize(24, 24)
+        close_button.setStyleSheet("""
+            QPushButton {
+                background-color: black;
+                color: white;
+                border: none;
+                border-radius: 12px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: red;
+            }
+        """)
+        close_button.clicked.connect(self.close)
+
+        # Create a horizontal layout for the close button
+        top_layout = QtWidgets.QHBoxLayout()
+        top_layout.addStretch()
+        top_layout.addWidget(close_button)
+
+        # Create a text label to display the translated text
+        self.text_label = QtWidgets.QLabel(text)
+        self.text_label.setWordWrap(True)
+        self.text_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.text_label.setStyleSheet("color: white;")
+        self.text_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+
+        # Set initial font
+        self.font = QtGui.QFont("Arial", 14)
+        self.text_label.setFont(self.font)
+
+        # Add close button and text label to the main layout
+        layout.addLayout(top_layout)
+        layout.addWidget(self.text_label)
+
+        self.setLayout(layout)
+
+    def resizeEvent(self, event):
+        # Adjust font size based on the window height
+        new_height = self.height()
+        # Simple scaling: font size is a fraction of the window height
+        font_size = max(10, int(new_height * 0.05))
+        self.font.setPointSize(font_size)
+        self.text_label.setFont(self.font)
+        super().resizeEvent(event)
+
 class TranslatorApp(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
+        self.translation_windows = []
         self.init_ui()
 
     def init_ui(self):
@@ -78,6 +160,19 @@ class TranslatorApp(QtWidgets.QWidget):
 
         # Capture Button
         self.capture_button = QtWidgets.QPushButton('Capture Screenshot', self)
+        self.capture_button.setStyleSheet("""
+            QPushButton {
+                padding: 10px 20px;
+                font-size: 16px;
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
         self.capture_button.clicked.connect(self.capture_screenshot)
         left_layout.addWidget(self.capture_button)
 
@@ -94,6 +189,10 @@ class TranslatorApp(QtWidgets.QWidget):
         # Text Area for Translation
         self.text_area = QtWidgets.QTextEdit(self)
         self.text_area.setReadOnly(True)
+        self.text_area.setStyleSheet("""
+            background-color: #f0f0f0;
+            font-size: 14px;
+        """)
         right_layout.addWidget(self.text_area)
 
         # Add both layouts to the main layout
@@ -118,6 +217,7 @@ class TranslatorApp(QtWidgets.QWidget):
     def on_selection_made(self, rect):
         try:
             logging.info(f"User selected rectangle: {rect}")
+            self.selected_rect = rect
             # Use mss to capture the selected region
             with mss.mss() as sct:
                 monitor = {
@@ -172,10 +272,12 @@ class TranslatorApp(QtWidgets.QWidget):
         translated_text = self.call_openai_api(img_bytes)
         if translated_text:
             logging.info("Translation successful.")
-            self.text_area.setText(translated_text)
+            translation_window = TranslationDisplayWindow(translated_text, self.selected_rect)
+            translation_window.show()
+            self.translation_windows.append(translation_window)
         else:
             logging.error("Translation failed.")
-            self.text_area.setText("Failed to get translation.")
+            QtWidgets.QMessageBox.critical(self, "Error", "Failed to get translation.")
 
     def pil_to_qt(self, pil_image):
         """Convert PIL Image to QPixmap without using ImageQt."""
@@ -218,7 +320,7 @@ class TranslatorApp(QtWidgets.QWidget):
             payload = {
                 "model": MODEL_NAME,
                 "messages": [
-                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "system", "content": "You are a helpful translation assistant."},
                     {"role": "user", "content": messages}
                 ],
                 "max_tokens": 300
