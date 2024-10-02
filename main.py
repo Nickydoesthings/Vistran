@@ -4,8 +4,9 @@ import os
 import base64
 import requests
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtWidgets import QApplication
-from PyQt5.QtGui import QIcon
+from PyQt5.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsDropShadowEffect
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QPen
+from PyQt5.QtCore import Qt, QRectF
 from PIL import Image
 import mss
 import openai
@@ -38,6 +39,16 @@ class SelectionWindow(QtWidgets.QWidget):
         self.origin = QtCore.QPoint()
         self.rubberBand = QtWidgets.QRubberBand(QtWidgets.QRubberBand.Rectangle, self)
 
+        # Add instruction label
+        self.instruction_label = QtWidgets.QLabel("Click and drag to select an area", self)
+        self.instruction_label.setStyleSheet("""
+            color: black; 
+            background-color: rgba(255, 255, 255, 150);
+            border-radius: 5px;
+            padding: 5px;
+        """)
+        self.instruction_label.move(10, 10)
+
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.LeftButton:
             self.origin = event.pos()
@@ -62,44 +73,59 @@ class SelectionWindow(QtWidgets.QWidget):
     def __del__(self):
         logging.info("SelectionWindow instance deleted.")
 
-class TranslationDisplayWindow(QtWidgets.QWidget):
+class TranslationDisplayWindow(QGraphicsView):
     def __init__(self, initial_text, rect):
         super().__init__()
-
-        # Remove window decorations and make the window stay on top
         self.setWindowFlags(
-            QtCore.Qt.WindowStaysOnTopHint |
-            QtCore.Qt.FramelessWindowHint
+            Qt.WindowStaysOnTopHint |
+            Qt.FramelessWindowHint |
+            Qt.Tool
         )
-
-        # Set window geometry to match the selected rectangle
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setStyleSheet("background: transparent;")
         self.setGeometry(rect)
 
-        # Set background color, border, and rounded corners
-        self.setStyleSheet("""
-            background-color: rgba(50, 50, 50, 220);
-            border: 2px solid #333333;
-            border-radius: 10px;
-        """)
+        # Disable scroll bars
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-        # Add drop shadow effect
-        self.shadow = QtWidgets.QGraphicsDropShadowEffect(self)
-        self.shadow.setBlurRadius(15)
-        self.shadow.setXOffset(0)
-        self.shadow.setYOffset(0)
-        self.shadow.setColor(QtGui.QColor(0, 0, 0, 160))
-        self.setGraphicsEffect(self.shadow)
+        # Create scene and set it to the view
+        self.scene = QGraphicsScene(self)
+        self.setScene(self.scene)
 
-        # Create a layout
-        layout = QtWidgets.QVBoxLayout()
-        layout.setContentsMargins(10, 10, 10, 10)
+        # Create a pixmap item for the background
+        self.background = QGraphicsPixmapItem()
+        self.scene.addItem(self.background)
 
-        # Create a close button with "X"
-        close_button = QtWidgets.QPushButton("X")
+        # Create blur effect
+        self.blur_effect = QGraphicsBlurEffect()
+        self.blur_effect.setBlurRadius(10)
+        self.background.setGraphicsEffect(self.blur_effect)
+
+        # Create semi-transparent overlay
+        self.overlay = self.scene.addRect(QRectF(self.rect()), QPen(Qt.NoPen), QColor(255, 255, 255, 100))
+
+        # Create text item
+        self.text_item = self.scene.addText(initial_text)
+        self.text_item.setDefaultTextColor(Qt.black)
+
+        # Center the text
+        text_rect = self.text_item.boundingRect()
+        self.text_item.setPos((self.width() - text_rect.width()) / 2, (self.height() - text_rect.height()) / 2)
+
+        # Add drop shadow effect to the text
+        shadow_effect = QGraphicsDropShadowEffect()
+        shadow_effect.setBlurRadius(5)
+        shadow_effect.setOffset(2, 2)
+        shadow_effect.setColor(QColor(0, 0, 0, 50))
+        self.text_item.setGraphicsEffect(shadow_effect)
+
+        # Create close button
+        close_button = QtWidgets.QPushButton("X", self)
         close_button.setFixedSize(24, 24)
         close_button.setStyleSheet("""
             QPushButton {
-                background-color: black;
+                background-color: rgba(0, 0, 0, 100);
                 color: white;
                 border: none;
                 border-radius: 12px;
@@ -107,47 +133,40 @@ class TranslationDisplayWindow(QtWidgets.QWidget):
                 font-size: 14px;
             }
             QPushButton:hover {
-                background-color: red;
+                background-color: rgba(255, 0, 0, 150);
             }
         """)
         close_button.clicked.connect(self.close)
-
-        # Create a horizontal layout for the close button
-        top_layout = QtWidgets.QHBoxLayout()
-        top_layout.addStretch()
-        top_layout.addWidget(close_button)
-
-        # Create a text label to display the translation
-        self.text_label = QtWidgets.QLabel(initial_text)
-        self.text_label.setWordWrap(True)
-        self.text_label.setAlignment(QtCore.Qt.AlignCenter)
-        self.text_label.setStyleSheet("color: white;")
-        self.text_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-
-        # Set initial font
-        self.font = QtGui.QFont("Arial", 14)
-        self.text_label.setFont(self.font)
-
-        # Add close button and text label to the main layout
-        layout.addLayout(top_layout)
-        layout.addWidget(self.text_label)
-
-        self.setLayout(layout)
+        close_button.move(self.width() - 30, 5)
 
     def resizeEvent(self, event):
-        # Adjust font size based on the window height
-        new_height = self.height()
-        # Simple scaling: font size is a fraction of the window height
-        font_size = max(10, int(new_height * 0.05))
-        self.font.setPointSize(font_size)
-        self.text_label.setFont(self.font)
         super().resizeEvent(event)
+        self.updateBackground()
+        self.overlay.setRect(QRectF(self.rect()))
+        self.text_item.setTextWidth(self.width() - 20)
 
-    @QtCore.pyqtSlot(str)
+        # Re-center the text on resize
+        text_rect = self.text_item.boundingRect()
+        self.text_item.setPos((self.width() - text_rect.width()) / 2, (self.height() - text_rect.height()) / 2)
+
+    def updateBackground(self):
+        desktop = QApplication.desktop().screenNumber(QApplication.desktop().cursor().pos())
+        screen = QApplication.screens()[desktop]
+        pixmap = screen.grabWindow(0, self.x(), self.y(), self.width(), self.height())
+        self.background.setPixmap(pixmap)
+
     def update_text(self, new_text):
-        """Update the text displayed in the window."""
-        self.text_label.setText(new_text)
+        self.text_item.setPlainText(new_text)
+        # Re-center the text after updating
+        text_rect = self.text_item.boundingRect()
+        self.text_item.setPos((self.width() - text_rect.width()) / 2, (self.height() - text_rect.height()) / 2)
 
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QColor(200, 200, 200, 100))
+        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 10, 10)
 
 class TranslationTask(QtCore.QRunnable):
     def __init__(self, img_bytes, translation_window, app_instance):

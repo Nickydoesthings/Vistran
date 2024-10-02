@@ -1,0 +1,7 @@
+{
+    "python.defaultInterpreterPath": "C:\\Users\\nicky\\OneDrive\\Desktop\\Python\\Vistran\\vistran\\Scripts\\python.exe",
+    "python.terminal.activateEnvironment": true,
+    "python.analysis.extraPaths": [
+        "C:\\Users\\nicky\\OneDrive\\Desktop\\Python\\Vistran\\vistran\\Lib\\site-packages"
+    ]
+}
