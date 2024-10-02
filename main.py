@@ -63,7 +63,7 @@ class SelectionWindow(QtWidgets.QWidget):
         logging.info("SelectionWindow instance deleted.")
 
 class TranslationDisplayWindow(QtWidgets.QWidget):
-    def __init__(self, text, rect):
+    def __init__(self, initial_text, rect):
         super().__init__()
 
         # Remove window decorations and make the window stay on top
@@ -117,8 +117,8 @@ class TranslationDisplayWindow(QtWidgets.QWidget):
         top_layout.addStretch()
         top_layout.addWidget(close_button)
 
-        # Create a text label to display the translated text
-        self.text_label = QtWidgets.QLabel(text)
+        # Create a text label to display the translation
+        self.text_label = QtWidgets.QLabel(initial_text)
         self.text_label.setWordWrap(True)
         self.text_label.setAlignment(QtCore.Qt.AlignCenter)
         self.text_label.setStyleSheet("color: white;")
@@ -143,22 +143,51 @@ class TranslationDisplayWindow(QtWidgets.QWidget):
         self.text_label.setFont(self.font)
         super().resizeEvent(event)
 
+    @QtCore.pyqtSlot(str)
+    def update_text(self, new_text):
+        """Update the text displayed in the window."""
+        self.text_label.setText(new_text)
+
+
+class TranslationTask(QtCore.QRunnable):
+    def __init__(self, img_bytes, translation_window, app_instance):
+        super().__init__()
+        self.img_bytes = img_bytes
+        self.translation_window = translation_window
+        self.app_instance = app_instance
+
+    def run(self):
+        # Perform the translation in the background
+        translated_text = self.app_instance.call_openai_api(self.img_bytes)
+        if translated_text:
+            logging.info("Translation successful.")
+            # Emit the signal with the translated text
+            self.app_instance.translation_ready.emit(translated_text)
+        else:
+            logging.error("Translation failed.")
+            QtCore.QMetaObject.invokeMethod(
+                self.app_instance,
+                "show_error",
+                QtCore.Qt.QueuedConnection
+            )
+
+
 class TranslatorApp(QtWidgets.QWidget):
+    translation_ready = QtCore.pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.translation_windows = []
         self.init_ui()
+        self.translation_ready.connect(self.update_translation)
 
     def init_ui(self):
         logging.info("Initializing UI.")
-        self.setWindowTitle('Visual Translator')
-        self.setGeometry(100, 100, 800, 600)  # Increased size for better layout
+        self.setWindowTitle('Vistran: Visual Translator')
+        self.setGeometry(100, 100, 300, 200)  # Adjusted size for the simplified layout
 
         # Main Layout
-        main_layout = QtWidgets.QHBoxLayout()
-
-        # Left Layout (Button and Screenshot)
-        left_layout = QtWidgets.QVBoxLayout()
+        main_layout = QtWidgets.QVBoxLayout()
 
         # Capture Button
         self.capture_button = QtWidgets.QPushButton('Capture Screenshot', self)
@@ -176,30 +205,7 @@ class TranslatorApp(QtWidgets.QWidget):
             }
         """)
         self.capture_button.clicked.connect(self.capture_screenshot)
-        left_layout.addWidget(self.capture_button)
-
-        # Screenshot Display
-        self.screenshot_label = QtWidgets.QLabel(self)
-        self.screenshot_label.setFixedSize(400, 300)  # Adjust size as needed
-        self.screenshot_label.setStyleSheet("border: 1px solid black;")
-        self.screenshot_label.setAlignment(QtCore.Qt.AlignCenter)
-        left_layout.addWidget(self.screenshot_label)
-
-        # Right Layout (Translation)
-        right_layout = QtWidgets.QVBoxLayout()
-
-        # Text Area for Translation
-        self.text_area = QtWidgets.QTextEdit(self)
-        self.text_area.setReadOnly(True)
-        self.text_area.setStyleSheet("""
-            background-color: #f0f0f0;
-            font-size: 14px;
-        """)
-        right_layout.addWidget(self.text_area)
-
-        # Add both layouts to the main layout
-        main_layout.addLayout(left_layout)
-        main_layout.addLayout(right_layout)
+        main_layout.addWidget(self.capture_button)
 
         self.setLayout(main_layout)
         logging.info("UI initialized.")
@@ -245,6 +251,12 @@ class TranslatorApp(QtWidgets.QWidget):
                 self.selection_window.deleteLater()
                 self.selection_window = None
 
+            # Show the translation window with "Translating..." text immediately
+            self.translation_window = TranslationDisplayWindow("Translating...", self.selected_rect)
+            self.translation_window.show()
+            self.translation_windows.append(self.translation_window)
+
+            # Now process the image and update the window with the actual translation
             self.process_image(img)
         except Exception as e:
             logging.exception("Failed during screenshot processing.")
@@ -252,50 +264,15 @@ class TranslatorApp(QtWidgets.QWidget):
 
     def process_image(self, pil_image):
         logging.info("Processing captured image.")
-        self.text_area.setText("Processing...")
-
-        # Display the screenshot in the UI
-        qt_image = self.pil_to_qt(pil_image)
-        self.screenshot_label.setPixmap(qt_image.scaled(
-            self.screenshot_label.width(),
-            self.screenshot_label.height(),
-            QtCore.Qt.KeepAspectRatio,
-            QtCore.Qt.SmoothTransformation
-        ))
-        logging.info("Screenshot displayed in UI.")
-
         # Convert PIL Image to bytes
         img_byte_arr = io.BytesIO()
         pil_image.save(img_byte_arr, format='PNG')
         img_bytes = img_byte_arr.getvalue()
         logging.info("Image successfully converted to bytes.")
 
-        # Call OpenAI API
-        translated_text = self.call_openai_api(img_bytes)
-        if translated_text:
-            logging.info("Translation successful.")
-            translation_window = TranslationDisplayWindow(translated_text, self.selected_rect)
-            translation_window.show()
-            self.translation_windows.append(translation_window)
-        else:
-            logging.error("Translation failed.")
-            QtWidgets.QMessageBox.critical(self, "Error", "Failed to get translation.")
-
-    def pil_to_qt(self, pil_image):
-        """Convert PIL Image to QPixmap without using ImageQt."""
-        # Ensure the image is in RGB mode
-        if pil_image.mode != "RGB":
-            pil_image = pil_image.convert("RGB")
-        
-        # Get image data as bytes
-        data = pil_image.tobytes("raw", "RGB")
-        
-        # Create QImage from the data
-        qimage = QtGui.QImage(data, pil_image.width, pil_image.height, QtGui.QImage.Format_RGB888)
-        
-        # Convert QImage to QPixmap
-        pixmap = QtGui.QPixmap.fromImage(qimage)
-        return pixmap
+        # Create and start the translation task in a separate thread
+        translation_task = TranslationTask(img_bytes, self.translation_window, self)
+        QtCore.QThreadPool.globalInstance().start(translation_task)
 
     def call_openai_api(self, image_bytes):
         logging.info("Calling OpenAI API.")
@@ -346,6 +323,15 @@ class TranslatorApp(QtWidgets.QWidget):
         except Exception as e:
             logging.exception("Exception occurred during API call.")
             return None
+
+    @QtCore.pyqtSlot()
+    def show_error(self):
+        QtWidgets.QMessageBox.critical(self, "Error", "Failed to get translation.")
+
+    @QtCore.pyqtSlot(str)
+    def update_translation(self, translated_text):
+        if self.translation_window:
+            self.translation_window.update_text(translated_text)
 
 def main():
     logging.info("Starting Visual Translator application.")
