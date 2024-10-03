@@ -110,8 +110,7 @@ class TranslationDisplayWindow(QGraphicsView):
         self.text_item.setDefaultTextColor(Qt.black)
 
         # Center the text
-        text_rect = self.text_item.boundingRect()
-        self.text_item.setPos((self.width() - text_rect.width()) / 2, (self.height() - text_rect.height()) / 2)
+        self.center_text()
 
         # Add drop shadow effect to the text
         shadow_effect = QGraphicsDropShadowEffect()
@@ -146,8 +145,7 @@ class TranslationDisplayWindow(QGraphicsView):
         self.text_item.setTextWidth(self.width() - 20)
 
         # Re-center the text on resize
-        text_rect = self.text_item.boundingRect()
-        self.text_item.setPos((self.width() - text_rect.width()) / 2, (self.height() - text_rect.height()) / 2)
+        self.center_text()
 
     def updateBackground(self):
         desktop = QApplication.desktop().screenNumber(QApplication.desktop().cursor().pos())
@@ -155,9 +153,54 @@ class TranslationDisplayWindow(QGraphicsView):
         pixmap = screen.grabWindow(0, self.x(), self.y(), self.width(), self.height())
         self.background.setPixmap(pixmap)
 
+    def calculate_font_size(self, text):
+        max_font_size = 72  # Increased maximum font size
+        min_font_size = 10
+        margin = 20
+        available_height = self.height() - 2 * margin
+        available_width = self.width() - 2 * margin
+
+        # Binary search for the optimal font size
+        low, high = min_font_size, max_font_size
+        optimal_size = min_font_size
+
+        while low <= high:
+            mid = (low + high) // 2
+            font = self.text_item.font()
+            font.setPointSize(mid)
+            self.text_item.setFont(font)
+            self.text_item.setTextWidth(available_width)
+            text_rect = self.text_item.boundingRect()
+
+            if text_rect.width() <= available_width and text_rect.height() <= available_height:
+                optimal_size = mid
+                low = mid + 1  # Try a larger size
+            else:
+                high = mid - 1  # Try a smaller size
+
+        return optimal_size
+
     def update_text(self, new_text):
         self.text_item.setPlainText(new_text)
-        # Re-center the text after updating
+        
+        # Calculate and set the appropriate font size
+        font_size = self.calculate_font_size(new_text)
+        font = self.text_item.font()
+        font.setPointSize(font_size)
+        self.text_item.setFont(font)
+        
+        margin = 20
+        self.text_item.setTextWidth(self.width() - 2 * margin)
+        
+        # Enable word wrap
+        text_option = QtGui.QTextOption()
+        text_option.setWrapMode(QtGui.QTextOption.WordWrap)
+        self.text_item.document().setDefaultTextOption(text_option)
+        
+        # Re-center the text
+        self.center_text()
+
+    def center_text(self):
         text_rect = self.text_item.boundingRect()
         self.text_item.setPos((self.width() - text_rect.width()) / 2, (self.height() - text_rect.height()) / 2)
 
@@ -167,6 +210,10 @@ class TranslationDisplayWindow(QGraphicsView):
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setPen(QColor(200, 200, 200, 100))
         painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 10, 10)
+
+    def wheelEvent(self, event):
+        # Override to disable scrolling with the mouse wheel
+        event.ignore()
 
 class TranslationTask(QtCore.QRunnable):
     def __init__(self, img_bytes, translation_window, app_instance):
@@ -305,7 +352,12 @@ class TranslatorApp(QtWidgets.QWidget):
             messages = [
                 {
                     "type": "text",
-                    "text": "Please extract any Japanese text from the image and translate it into English. Include only the translated text in your answer and do not give any context."
+                    "text": """
+                    Please extract any Japanese text from the image and translate it into English. 
+                    Include only the translated text in your answer and do not give any context, and do not include any other text.
+                    Do not include quotation marks in your response unless there are actual quotation marks in the text, or the equivalent of quotation marks in Japanese.
+                    If there is no Japanese text in the image, or you are unable to translate it, please respond with "-Unable to translate-"
+                    """
                 },
                 {
                     "type": "image_url",
