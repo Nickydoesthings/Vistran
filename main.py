@@ -11,6 +11,9 @@ from PIL import Image
 import mss
 import openai
 import logging
+import pytesseract
+from argostranslate import package, translate
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -224,7 +227,7 @@ class TranslationTask(QtCore.QRunnable):
 
     def run(self):
         # Perform the translation in the background
-        translated_text = self.app_instance.call_openai_api(self.img_bytes)
+        translated_text = self.app_instance.perform_translation(self.img_bytes)
         if translated_text:
             logging.info("Translation successful.")
             # Emit the signal with the translated text
@@ -237,15 +240,28 @@ class TranslationTask(QtCore.QRunnable):
                 QtCore.Qt.QueuedConnection
             )
 
-
 class TranslatorApp(QtWidgets.QWidget):
     translation_ready = QtCore.pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
         self.translation_windows = []
+        self.translation_type = "Online"  # Default to Online translation
+        self.init_tesseract()
         self.init_ui()
         self.translation_ready.connect(self.update_translation)
+        self.init_argos_translate()
+
+    def init_tesseract(self):
+        # Specify the path to the Tesseract executable
+        tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # for Windows
+        # tesseract_path = '/usr/local/bin/tesseract'  # Example for macOS/Linux
+        
+        if os.path.exists(tesseract_path):
+            pytesseract.pytesseract.tesseract_cmd = tesseract_path
+            logging.info(f"Tesseract path set to: {tesseract_path}")
+        else:
+            logging.warning("Tesseract executable not found at the specified path. Make sure Tesseract is installed correctly.")
 
     def init_ui(self):
         logging.info("Initializing UI.")
@@ -253,7 +269,15 @@ class TranslatorApp(QtWidgets.QWidget):
         self.setGeometry(100, 100, 300, 200)  # Adjusted size for the simplified layout
 
         # Main Layout
-        main_layout = QtWidgets.QVBoxLayout()
+        self.main_layout = QtWidgets.QVBoxLayout()
+
+        # Create a stacked widget to hold different pages
+        self.stacked_widget = QtWidgets.QStackedWidget()
+        self.main_layout.addWidget(self.stacked_widget)
+
+        # Create main page
+        self.main_page = QtWidgets.QWidget()
+        main_page_layout = QtWidgets.QVBoxLayout(self.main_page)
 
         # Capture Button
         self.capture_button = QtWidgets.QPushButton('Capture Screenshot', self)
@@ -271,10 +295,153 @@ class TranslatorApp(QtWidgets.QWidget):
             }
         """)
         self.capture_button.clicked.connect(self.capture_screenshot)
-        main_layout.addWidget(self.capture_button)
+        main_page_layout.addWidget(self.capture_button)
 
-        self.setLayout(main_layout)
+        # Options Button
+        self.options_button = QtWidgets.QPushButton('Options', self)
+        self.options_button.setStyleSheet("""
+            QPushButton {
+                padding: 10px 20px;
+                font-size: 16px;
+                background-color: #D3D3D3;
+                color: black;
+                border: none;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #C0C0C0;
+            }
+        """)
+        self.options_button.clicked.connect(self.show_options)
+        main_page_layout.addWidget(self.options_button)
+
+        # Create options page
+        self.options_page = QtWidgets.QWidget()
+        options_page_layout = QtWidgets.QVBoxLayout(self.options_page)
+
+        # Translation Type Option
+        translation_type_layout = QtWidgets.QHBoxLayout()
+        translation_type_label = QtWidgets.QLabel("Translation Type:")
+        self.translation_type_combo = QtWidgets.QComboBox()
+        self.translation_type_combo.addItems(["Online", "Offline"])
+        self.translation_type_combo.setCurrentText(self.translation_type)
+        self.translation_type_combo.currentTextChanged.connect(self.update_translation_type)
+
+        translation_type_layout.addWidget(translation_type_label)
+        translation_type_layout.addWidget(self.translation_type_combo)
+        options_page_layout.addLayout(translation_type_layout)
+
+        # Add a stretch to push the back button to the bottom
+        options_page_layout.addStretch(1)
+
+        # Back Button
+        self.back_button = QtWidgets.QPushButton('Back', self)
+        self.back_button.setStyleSheet("""
+            QPushButton {
+                padding: 10px 20px;
+                font-size: 16px;
+                background-color: #D3D3D3;
+                color: black;
+                border: none;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #C0C0C0;
+            }
+        """)
+        self.back_button.clicked.connect(self.show_main)
+        options_page_layout.addWidget(self.back_button)
+
+        # Add pages to stacked widget
+        self.stacked_widget.addWidget(self.main_page)
+        self.stacked_widget.addWidget(self.options_page)
+
+        self.setLayout(self.main_layout)
         logging.info("UI initialized.")
+
+    def show_options(self):
+        self.stacked_widget.setCurrentWidget(self.options_page)
+
+    def show_main(self):
+        self.stacked_widget.setCurrentWidget(self.main_page)
+
+    def update_translation_type(self, new_type):
+        self.translation_type = new_type
+        logging.info(f"Translation type changed to: {self.translation_type}")
+
+    def init_argos_translate(self):
+        try:
+            installed_languages = translate.get_installed_languages()
+            logging.info(f"Installed languages: {[lang.code for lang in installed_languages]}")
+
+            ja_lang = next((lang for lang in installed_languages if lang.code == 'ja'), None)
+
+            if ja_lang:
+                translations_to = [
+                    getattr(lang, 'code', None) for lang in ja_lang.translations_to
+                    if getattr(lang, 'code', None) is not None
+                ]
+                logging.info(f"Japanese translations available to: {translations_to}")
+
+                if 'en' not in translations_to:
+                    logging.info("Japanese to English model not found. Downloading...")
+                    self.download_and_install_argos_package('ja', 'en')
+                else:
+                    logging.info("Japanese to English model is already installed.")
+            else:
+                logging.info("Japanese language not found. Downloading Japanese to English model...")
+                self.download_and_install_argos_package('ja', 'en')
+
+        except Exception as e:
+            logging.exception("An error occurred while initializing Argos Translate.")
+
+    def download_and_install_argos_package(self, from_code, to_code):
+        try:
+            installed_languages = translate.get_installed_languages()
+            from_lang = next((lang for lang in installed_languages if lang.code == from_code), None)
+            
+            if from_lang:
+                translations_to = [
+                    getattr(lang, 'code', None) for lang in from_lang.translations_to
+                    if getattr(lang, 'code', None) is not None
+                ]
+                if to_code in translations_to:
+                    logging.info(f"{from_code} to {to_code} translation is already available.")
+                    return  # Exit the method if the translation is already available
+
+            # If we reach here, we need to download and install the package
+            package.update_package_index()
+            available_packages = package.get_available_packages()
+
+            desired_package = next(
+                (pkg for pkg in available_packages if pkg.from_code == from_code and pkg.to_code == to_code),
+                None
+            )
+
+            if desired_package:
+                download_path = desired_package.download()
+                package.install_from_path(download_path)
+                logging.info(f"Installed Argos Translate package: {from_code} to {to_code}")
+
+                # Verify installation
+                installed_languages = translate.get_installed_languages()
+                from_lang = next((lang for lang in installed_languages if lang.code == from_code), None)
+                if from_lang:
+                    translations_to = [
+                        getattr(lang, 'code', None) for lang in from_lang.translations_to
+                        if getattr(lang, 'code', None) is not None
+                    ]
+                    if to_code in translations_to:
+                        logging.info(f"{from_code} to {to_code} translation is now available.")
+                    else:
+                        logging.warning(f"{from_code} to {to_code} translation not found after installation. This may require investigation.")
+                else:
+                    logging.warning(f"Language {from_code} not found after installation. This may require investigation.")
+            else:
+                logging.error(f"No available Argos Translate package for {from_code} to {to_code}.")
+
+        except Exception as e:
+            logging.exception("An error occurred while managing Argos Translate package.")
 
     def capture_screenshot(self):
         try:
@@ -340,8 +507,15 @@ class TranslatorApp(QtWidgets.QWidget):
         translation_task = TranslationTask(img_bytes, self.translation_window, self)
         QtCore.QThreadPool.globalInstance().start(translation_task)
 
+    def perform_translation(self, image_bytes):
+        if self.translation_type == "Offline":
+            logging.info("Using offline translation.")
+            return self.perform_offline_translation(image_bytes)
+        else:
+            logging.info("Using online translation (OpenAI API).")
+            return self.call_openai_api(image_bytes)
+
     def call_openai_api(self, image_bytes):
-        logging.info("Calling OpenAI API.")
         try:
             # Encode image to base64
             base64_image = base64.b64encode(image_bytes).decode('utf-8')
@@ -394,6 +568,36 @@ class TranslatorApp(QtWidgets.QWidget):
         except Exception as e:
             logging.exception("Exception occurred during API call.")
             return None
+
+    def perform_offline_translation(self, image_bytes):
+        try:
+            # Use Pillow to open the image
+            image = Image.open(io.BytesIO(image_bytes))
+
+            # Use Tesseract to perform OCR
+            japanese_text = pytesseract.image_to_string(image, lang='jpn')
+
+            if not japanese_text.strip():
+                return "-Unable to translate-"
+
+            # Use Argos Translate to translate the text
+            from_code = "ja"
+            to_code = "en"
+
+            # Load the translation model
+            installed_languages = translate.get_installed_languages()
+            from_lang = list(filter(lambda x: x.code == from_code, installed_languages))[0]
+            to_lang = list(filter(lambda x: x.code == to_code, installed_languages))[0]
+            translation = from_lang.get_translation(to_lang)
+
+            # Perform the translation
+            translated_text = translation.translate(japanese_text)
+
+            logging.info("Offline translation completed successfully.")
+            return translated_text
+        except Exception as e:
+            logging.exception("Error during offline translation.")
+            return "-Unable to translate-"
 
     @QtCore.pyqtSlot()
     def show_error(self):
