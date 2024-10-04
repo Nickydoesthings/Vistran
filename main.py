@@ -4,7 +4,7 @@ import os
 import base64
 import requests
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsDropShadowEffect
+from PyQt5.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsDropShadowEffect, QTextEdit, QVBoxLayout, QHBoxLayout, QLabel, QFrame
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QPen
 from PyQt5.QtCore import Qt, QRectF
 from PIL import Image
@@ -13,6 +13,7 @@ import openai
 import logging
 import pytesseract
 from argostranslate import package, translate
+import json
 
 
 # Set up logging
@@ -24,6 +25,10 @@ openai.api_key = OPENAI_API_KEY
 
 API_URL = 'https://api.openai.com/v1/chat/completions'
 MODEL_NAME = 'gpt-4o-mini'
+
+# Add this constant near the top of the file, after imports
+MINIMUM_WINDOW_SIZE = 70  # Default value
+MAX_RETRIES = 2 # Maximum number of retries for API calls
 
 class SelectionWindow(QtWidgets.QWidget):
     selection_made = QtCore.pyqtSignal(QtCore.QRect)
@@ -77,7 +82,7 @@ class SelectionWindow(QtWidgets.QWidget):
         logging.info("SelectionWindow instance deleted.")
 
 class TranslationDisplayWindow(QGraphicsView):
-    def __init__(self, initial_text, rect):
+    def __init__(self, initial_text, rect, minimum_size):
         super().__init__()
         self.setWindowFlags(
             Qt.WindowStaysOnTopHint |
@@ -86,7 +91,9 @@ class TranslationDisplayWindow(QGraphicsView):
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent;")
-        self.setGeometry(rect)
+        # Enforce minimum size
+        adjusted_rect = self.adjust_rect_to_minimum_size(rect, minimum_size)
+        self.setGeometry(adjusted_rect)
 
         # Disable scroll bars
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -218,6 +225,11 @@ class TranslationDisplayWindow(QGraphicsView):
         # Override to disable scrolling with the mouse wheel
         event.ignore()
 
+    def adjust_rect_to_minimum_size(self, rect, minimum_size):
+        width = max(rect.width(), minimum_size)
+        height = max(rect.height(), minimum_size)
+        return QtCore.QRect(rect.x(), rect.y(), width, height)
+
 class TranslationTask(QtCore.QRunnable):
     def __init__(self, img_bytes, translation_window, app_instance):
         super().__init__()
@@ -227,11 +239,11 @@ class TranslationTask(QtCore.QRunnable):
 
     def run(self):
         # Perform the translation in the background
-        translated_text = self.app_instance.perform_translation(self.img_bytes)
-        if translated_text:
+        japanese_text, english_text = self.app_instance.perform_translation(self.img_bytes)
+        if japanese_text and english_text:
             logging.info("Translation successful.")
-            # Emit the signal with the translated text
-            self.app_instance.translation_ready.emit(translated_text)
+            # Emit the signal with both Japanese and English text
+            self.app_instance.translation_ready.emit(japanese_text, english_text)
         else:
             logging.error("Translation failed.")
             QtCore.QMetaObject.invokeMethod(
@@ -241,15 +253,16 @@ class TranslationTask(QtCore.QRunnable):
             )
 
 class TranslatorApp(QtWidgets.QWidget):
-    translation_ready = QtCore.pyqtSignal(str)
+    translation_ready = QtCore.pyqtSignal(str, str)  # Modified to emit both Japanese and English text
 
     def __init__(self):
         super().__init__()
         self.translation_windows = []
         self.translation_type = "Online"  # Default to Online translation
+        self.minimum_window_size = MINIMUM_WINDOW_SIZE  # Initialize with default value
         self.init_tesseract()
         self.init_ui()
-        self.translation_ready.connect(self.update_translation)
+        self.translation_ready.connect(self.update_translation_display)
         self.init_argos_translate()
 
     def init_tesseract(self):
@@ -297,6 +310,50 @@ class TranslatorApp(QtWidgets.QWidget):
         self.capture_button.clicked.connect(self.capture_screenshot)
         main_page_layout.addWidget(self.capture_button)
 
+        # Create text display areas
+        text_display_layout = QVBoxLayout()  # Changed to QVBoxLayout
+
+        # Japanese text box
+        japanese_layout = QVBoxLayout()
+        japanese_label = QLabel("Japanese Text:")
+        japanese_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.japanese_text_display = QTextEdit(self)
+        self.japanese_text_display.setReadOnly(True)
+        self.japanese_text_display.setStyleSheet("""
+            QTextEdit {
+                background-color: #f0f0f0;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+                padding: 5px;
+                font-size: 14px;
+            }
+        """)
+        japanese_layout.addWidget(japanese_label)
+        japanese_layout.addWidget(self.japanese_text_display)
+
+        # English text box
+        english_layout = QVBoxLayout()
+        english_label = QLabel("English Translation:")
+        english_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.english_text_display = QTextEdit(self)
+        self.english_text_display.setReadOnly(True)
+        self.english_text_display.setStyleSheet("""
+            QTextEdit {
+                background-color: #f0f0f0;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+                padding: 5px;
+                font-size: 14px;
+            }
+        """)
+        english_layout.addWidget(english_label)
+        english_layout.addWidget(self.english_text_display)
+
+        text_display_layout.addLayout(japanese_layout)
+        text_display_layout.addLayout(english_layout)
+
+        main_page_layout.addLayout(text_display_layout)
+
         # Options Button
         self.options_button = QtWidgets.QPushButton('Options', self)
         self.options_button.setStyleSheet("""
@@ -331,6 +388,18 @@ class TranslatorApp(QtWidgets.QWidget):
         translation_type_layout.addWidget(self.translation_type_combo)
         options_page_layout.addLayout(translation_type_layout)
 
+        # Minimum Window Size Option
+        window_size_layout = QtWidgets.QHBoxLayout()
+        window_size_label = QtWidgets.QLabel("Minimum Window Size (pixels):")
+        self.window_size_combo = QtWidgets.QComboBox()
+        self.window_size_combo.addItems(["70", "80", "90", "100"])
+        self.window_size_combo.setCurrentText(str(self.minimum_window_size))
+        self.window_size_combo.currentTextChanged.connect(self.update_minimum_window_size)
+
+        window_size_layout.addWidget(window_size_label)
+        window_size_layout.addWidget(self.window_size_combo)
+        options_page_layout.addLayout(window_size_layout)
+
         # Add a stretch to push the back button to the bottom
         options_page_layout.addStretch(1)
 
@@ -359,6 +428,12 @@ class TranslatorApp(QtWidgets.QWidget):
         self.setLayout(self.main_layout)
         logging.info("UI initialized.")
 
+        # Set the default size of the window
+        self.resize(400, 300)  # Width: 800px, Height: 600px
+
+        # Optionally, set a minimum size
+        self.setMinimumSize(400, 200)
+
     def show_options(self):
         self.stacked_widget.setCurrentWidget(self.options_page)
 
@@ -368,6 +443,10 @@ class TranslatorApp(QtWidgets.QWidget):
     def update_translation_type(self, new_type):
         self.translation_type = new_type
         logging.info(f"Translation type changed to: {self.translation_type}")
+
+    def update_minimum_window_size(self, new_size):
+        self.minimum_window_size = int(new_size)
+        logging.info(f"Minimum window size changed to: {self.minimum_window_size}")
 
     def init_argos_translate(self):
         try:
@@ -464,8 +543,8 @@ class TranslatorApp(QtWidgets.QWidget):
                 monitor = {
                     "left": rect.left(),
                     "top": rect.top(),
-                    "width": rect.width(),
-                    "height": rect.height()
+                    "width": max(rect.width(), self.minimum_window_size),
+                    "height": max(rect.height(), self.minimum_window_size)
                 }
                 logging.info(f"Capturing screen: {monitor}")
                 screenshot = sct.grab(monitor)
@@ -485,7 +564,7 @@ class TranslatorApp(QtWidgets.QWidget):
                 self.selection_window = None
 
             # Show the translation window with "Translating..." text immediately
-            self.translation_window = TranslationDisplayWindow("Translating...", self.selected_rect)
+            self.translation_window = TranslationDisplayWindow("Translating...", self.selected_rect, self.minimum_window_size)
             self.translation_window.show()
             self.translation_windows.append(self.translation_window)
 
@@ -513,7 +592,13 @@ class TranslatorApp(QtWidgets.QWidget):
             return self.perform_offline_translation(image_bytes)
         else:
             logging.info("Using online translation (OpenAI API).")
-            return self.call_openai_api(image_bytes)
+            for attempt in range(MAX_RETRIES):
+                japanese_text, english_text = self.call_openai_api(image_bytes)
+                if not (japanese_text.startswith("API") and english_text.startswith("API")):
+                    return japanese_text, english_text
+                logging.warning(f"API call failed. Attempt {attempt + 1} of {MAX_RETRIES}")
+            logging.error("All API call attempts failed")
+            return "APIコールが失敗しました", "All API call attempts failed"
 
     def call_openai_api(self, image_bytes):
         try:
@@ -528,9 +613,17 @@ class TranslatorApp(QtWidgets.QWidget):
                     "type": "text",
                     "text": """
                     Please extract any Japanese text from the image and translate it into English. 
-                    Include only the translated text in your answer and do not give any context, and do not include any other text.
-                    Do not include quotation marks in your response unless there are actual quotation marks in the text, or the equivalent of quotation marks in Japanese.
-                    If there is no Japanese text in the image, or you are unable to translate it, please respond with "-Unable to translate-"
+                    Provide your response in the following JSON format:
+                    {
+                        "japanese": "The original Japanese text",
+                        "english": "The English translation"
+                    }
+                    If there is no Japanese text in the image, or you are unable to translate it, 
+                    please respond with:
+                    {
+                        "japanese": "-Unable to extract-",
+                        "english": "-Unable to translate-"
+                    }
                     """
                 },
                 {
@@ -559,15 +652,25 @@ class TranslatorApp(QtWidgets.QWidget):
             response = requests.post(API_URL, headers=headers, json=payload)
             if response.status_code == 200:
                 result = response.json()
-                translated_text = result['choices'][0]['message']['content'].strip()
-                logging.info("Received successful response from OpenAI API.")
-                return translated_text
+                
+                # Log the raw API response for debugging
+                logging.debug(f"Raw API response: {result}")
+                
+                try:
+                    content = result['choices'][0]['message']['content'].strip()
+                    translation_data = json.loads(content)
+                    logging.info("Received successful response from OpenAI API.")
+                    return translation_data['japanese'], translation_data['english']
+                except (KeyError, json.JSONDecodeError) as e:
+                    logging.error(f"Failed to parse API response: {e}")
+                    logging.error(f"Response content: {content}")
+                    return "API解析エラー", "API parsing error"
             else:
                 logging.error(f"API Error: {response.status_code}, {response.text}")
-                return None
+                return f"APIエラー: {response.status_code}", f"API error: {response.status_code}"
         except Exception as e:
             logging.exception("Exception occurred during API call.")
-            return None
+            return "APIコールエラー", f"API call error: {str(e)}"
 
     def perform_offline_translation(self, image_bytes):
         try:
@@ -578,7 +681,7 @@ class TranslatorApp(QtWidgets.QWidget):
             japanese_text = pytesseract.image_to_string(image, lang='jpn')
 
             if not japanese_text.strip():
-                return "-Unable to translate-"
+                return "-Unable to extract-", "-Unable to translate-"
 
             # Use Argos Translate to translate the text
             from_code = "ja"
@@ -594,19 +697,32 @@ class TranslatorApp(QtWidgets.QWidget):
             translated_text = translation.translate(japanese_text)
 
             logging.info("Offline translation completed successfully.")
-            return translated_text
+            return japanese_text, translated_text
         except Exception as e:
             logging.exception("Error during offline translation.")
-            return "-Unable to translate-"
+            return "-Unable to extract-", "-Unable to translate-"
 
     @QtCore.pyqtSlot()
     def show_error(self):
         QtWidgets.QMessageBox.critical(self, "Error", "Failed to get translation.")
 
-    @QtCore.pyqtSlot(str)
-    def update_translation(self, translated_text):
+    @QtCore.pyqtSlot(str, str)
+    def update_translation_display(self, japanese_text, english_text):
         if self.translation_window:
-            self.translation_window.update_text(translated_text)
+            self.translation_window.update_text(english_text)
+        
+        # Update the text displays in the main window
+        if japanese_text.startswith("API") and english_text.startswith("API"):
+            # This is an error message
+            self.japanese_text_display.setText(japanese_text)
+            self.english_text_display.setText(english_text)
+        else:
+            self.japanese_text_display.setText(japanese_text)
+            self.english_text_display.setText(english_text)
+        
+        # Log the displayed text for debugging
+        logging.debug(f"Displayed Japanese text: {japanese_text}")
+        logging.debug(f"Displayed English text: {english_text}")
 
 def main():
     logging.info("Starting Visual Translator application.")
