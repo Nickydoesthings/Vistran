@@ -14,7 +14,10 @@ import logging
 import pytesseract
 from argostranslate import package, translate
 import json
-
+import time
+from urllib.error import URLError
+import cv2
+import numpy as np
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -29,6 +32,51 @@ MODEL_NAME = 'gpt-4o-mini'
 # Add this constant near the top of the file, after imports
 MINIMUM_WINDOW_SIZE = 70  # Default value
 MAX_RETRIES = 2 # Maximum number of retries for API calls
+
+def preprocess_image(image):
+    # Convert PIL Image to OpenCV format
+    cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    # Convert to grayscale
+    gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+    # Apply thresholding
+    thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    # Apply dilation
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3,3))
+    dilated = cv2.dilate(thresh, kernel, iterations=1)
+    # Convert back to PIL Image
+    return Image.fromarray(cv2.cvtColor(dilated, cv2.COLOR_BGR2RGB))
+
+def scale_image(image, scale_factor=2):
+    width, height = image.size
+    return image.resize((width * scale_factor, height * scale_factor), Image.LANCZOS)
+
+def detect_orientation(image):
+    # Convert PIL Image to OpenCV format
+    cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    # Convert to grayscale
+    gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+    # Detect orientation
+    coords = np.column_stack(np.where(gray > 0))
+    angle = cv2.minAreaRect(coords)[-1]
+    if angle < -45:
+        angle = -(90 + angle)
+    else:
+        angle = -angle
+    return angle
+
+def rotate_image(image, angle):
+    return image.rotate(angle, expand=True)
+
+def post_process_ocr(text):
+    # Replace common misrecognitions
+    corrections = {
+        '0': '〇',
+        '1': '一',
+        # Add more based on observed errors
+    }
+    for wrong, correct in corrections.items():
+        text = text.replace(wrong, correct)
+    return text
 
 class SelectionWindow(QtWidgets.QWidget):
     selection_made = QtCore.pyqtSignal(QtCore.QRect)
@@ -253,7 +301,7 @@ class TranslationTask(QtCore.QRunnable):
             )
 
 class TranslatorApp(QtWidgets.QWidget):
-    translation_ready = QtCore.pyqtSignal(str, str)  # Modified to emit both Japanese and English text
+    translation_ready = QtCore.pyqtSignal(str, str)  # Emits both Japanese and English text
 
     def __init__(self):
         super().__init__()
@@ -449,78 +497,86 @@ class TranslatorApp(QtWidgets.QWidget):
         logging.info(f"Minimum window size changed to: {self.minimum_window_size}")
 
     def init_argos_translate(self):
-        try:
-            installed_languages = translate.get_installed_languages()
-            logging.info(f"Installed languages: {[lang.code for lang in installed_languages]}")
+        from_code = "ja"
+        to_code = "en"
+        success = self.download_and_install_argos_package(from_code, to_code)
+        if success:
+            logging.info(f"Argos Translate is ready for {from_code} to {to_code} translation.")
+        else:
+            logging.error(f"Failed to set up Argos Translate for {from_code} to {to_code} translation.")
 
-            ja_lang = next((lang for lang in installed_languages if lang.code == 'ja'), None)
-
-            if ja_lang:
-                translations_to = [
-                    getattr(lang, 'code', None) for lang in ja_lang.translations_to
-                    if getattr(lang, 'code', None) is not None
-                ]
-                logging.info(f"Japanese translations available to: {translations_to}")
-
-                if 'en' not in translations_to:
-                    logging.info("Japanese to English model not found. Downloading...")
-                    self.download_and_install_argos_package('ja', 'en')
-                else:
-                    logging.info("Japanese to English model is already installed.")
-            else:
-                logging.info("Japanese language not found. Downloading Japanese to English model...")
-                self.download_and_install_argos_package('ja', 'en')
-
-        except Exception as e:
-            logging.exception("An error occurred while initializing Argos Translate.")
-
-    def download_and_install_argos_package(self, from_code, to_code):
-        try:
-            installed_languages = translate.get_installed_languages()
-            from_lang = next((lang for lang in installed_languages if lang.code == from_code), None)
-            
-            if from_lang:
-                translations_to = [
-                    getattr(lang, 'code', None) for lang in from_lang.translations_to
-                    if getattr(lang, 'code', None) is not None
-                ]
-                if to_code in translations_to:
-                    logging.info(f"{from_code} to {to_code} translation is already available.")
-                    return  # Exit the method if the translation is already available
-
-            # If we reach here, we need to download and install the package
-            package.update_package_index()
-            available_packages = package.get_available_packages()
-
-            desired_package = next(
-                (pkg for pkg in available_packages if pkg.from_code == from_code and pkg.to_code == to_code),
-                None
-            )
-
-            if desired_package:
-                download_path = desired_package.download()
-                package.install_from_path(download_path)
-                logging.info(f"Installed Argos Translate package: {from_code} to {to_code}")
-
-                # Verify installation
+    def download_and_install_argos_package(self, from_code, to_code, max_retries=3):
+        for attempt in range(max_retries):
+            try:
+                # Check if the translation package is already installed
                 installed_languages = translate.get_installed_languages()
-                from_lang = next((lang for lang in installed_languages if lang.code == from_code), None)
-                if from_lang:
-                    translations_to = [
-                        getattr(lang, 'code', None) for lang in from_lang.translations_to
-                        if getattr(lang, 'code', None) is not None
-                    ]
-                    if to_code in translations_to:
-                        logging.info(f"{from_code} to {to_code} translation is now available.")
-                    else:
-                        logging.warning(f"{from_code} to {to_code} translation not found after installation. This may require investigation.")
-                else:
-                    logging.warning(f"Language {from_code} not found after installation. This may require investigation.")
-            else:
-                logging.error(f"No available Argos Translate package for {from_code} to {to_code}.")
+                if self.is_translation_available(installed_languages, from_code, to_code):
+                    logging.info(f"{from_code} to {to_code} translation is already available.")
+                    return True
 
-        except Exception as e:
-            logging.exception("An error occurred while managing Argos Translate package.")
+                # Update package index
+                package.update_package_index()
+                available_packages = package.get_available_packages()
+
+                # Find the desired package
+                desired_package = next(
+                    (pkg for pkg in available_packages if pkg.from_code == from_code and pkg.to_code == to_code),
+                    None
+                )
+
+                if desired_package:
+                    # Download and install the package
+                    download_path = desired_package.download()
+                    package.install_from_path(download_path)
+                    logging.info(f"Installed Argos Translate package: {from_code} to {to_code}")
+
+                    # Reload installed languages to refresh the state
+                    translate.load_installed_languages()
+                    installed_languages = translate.get_installed_languages()
+
+                    # Verify installation
+                    if self.is_translation_available(installed_languages, from_code, to_code):
+                        logging.info(f"{from_code} to {to_code} translation is now available.")
+                        return True
+                    else:
+                        logging.warning(f"{from_code} to {to_code} translation not found after installation. Retrying...")
+                else:
+                    logging.error(f"No available Argos Translate package for {from_code} to {to_code}.")
+                    return False
+
+            except URLError as e:
+                logging.error(f"Network error occurred: {e}. Retrying in 5 seconds...")
+                time.sleep(5)
+            except Exception as e:
+                logging.exception(f"An error occurred while managing Argos Translate package: {e}")
+                if attempt < max_retries - 1:
+                    logging.info(f"Retrying in 5 seconds... (Attempt {attempt + 2} of {max_retries})")
+                    time.sleep(5)
+                else:
+                    logging.error("Max retries reached. Unable to install the package.")
+                    return False
+
+        logging.error(f"Failed to install {from_code} to {to_code} translation after {max_retries} attempts.")
+        return False
+
+    def is_translation_available(self, installed_languages, from_code, to_code):
+        from_lang = next((lang for lang in installed_languages if lang.code == from_code), None)
+        to_lang = next((lang for lang in installed_languages if lang.code == to_code), None)
+        
+        if from_lang and to_lang:
+            translation = from_lang.get_translation(to_lang)
+            if translation:
+                logging.info(f"Translation from '{from_code}' to '{to_code}' is available.")
+                return True
+            else:
+                logging.info(f"Translation from '{from_code}' to '{to_code}' is NOT available.")
+        else:
+            if not from_lang:
+                logging.info(f"Source language '{from_code}' is not installed.")
+            if not to_lang:
+                logging.info(f"Target language '{to_code}' is not installed.")
+        
+        return False
 
     def capture_screenshot(self):
         try:
@@ -657,14 +713,26 @@ class TranslatorApp(QtWidgets.QWidget):
                 logging.debug(f"Raw API response: {result}")
                 
                 try:
-                    content = result['choices'][0]['message']['content'].strip()
+                    # Extract the content from the API response
+                    content = result['choices'][0]['message']['content']
+                    
+                    # Remove Markdown code block formatting if present
+                    content = content.strip('`')
+                    if content.startswith('json\n'):
+                        content = content[5:]  # Remove 'json\n'
+                    
+                    # Parse the content as JSON
                     translation_data = json.loads(content)
                     logging.info("Received successful response from OpenAI API.")
-                    return translation_data['japanese'], translation_data['english']
-                except (KeyError, json.JSONDecodeError) as e:
-                    logging.error(f"Failed to parse API response: {e}")
+                    return translation_data.get('japanese', '-Unable to extract-'), translation_data.get('english', '-Unable to translate-')
+                except json.JSONDecodeError as e:
+                    logging.error(f"Failed to parse API response as JSON: {e}")
                     logging.error(f"Response content: {content}")
                     return "API解析エラー", "API parsing error"
+                except KeyError as e:
+                    logging.error(f"Unexpected API response structure: {e}")
+                    logging.error(f"Response content: {result}")
+                    return "API構造エラー", "API structure error"
             else:
                 logging.error(f"API Error: {response.status_code}, {response.text}")
                 return f"APIエラー: {response.status_code}", f"API error: {response.status_code}"
@@ -674,33 +742,44 @@ class TranslatorApp(QtWidgets.QWidget):
 
     def perform_offline_translation(self, image_bytes):
         try:
-            # Use Pillow to open the image
+            # Open and preprocess the image
             image = Image.open(io.BytesIO(image_bytes))
+            image = preprocess_image(image)
+            image = scale_image(image)
 
-            # Use Tesseract to perform OCR
-            japanese_text = pytesseract.image_to_string(image, lang='jpn')
+            # Detect and correct orientation
+            angle = detect_orientation(image)
+            if angle != 0:
+                image = rotate_image(image, angle)
+
+            # Perform OCR with custom configuration
+            japanese_text = pytesseract.image_to_string(
+                image,
+                lang='jpn',
+                config='--psm 6 --oem 1 -c preserve_interword_spaces=1'
+            )
+            
+            # Post-process OCR results
+            japanese_text = post_process_ocr(japanese_text)
+
+            logging.info(f"OCR result: {japanese_text}")
 
             if not japanese_text.strip():
+                logging.warning("No text extracted by OCR.")
                 return "-Unable to extract-", "-Unable to translate-"
 
             # Use Argos Translate to translate the text
             from_code = "ja"
             to_code = "en"
 
-            # Load the translation model
-            installed_languages = translate.get_installed_languages()
-            from_lang = list(filter(lambda x: x.code == from_code, installed_languages))[0]
-            to_lang = list(filter(lambda x: x.code == to_code, installed_languages))[0]
-            translation = from_lang.get_translation(to_lang)
-
-            # Perform the translation
-            translated_text = translation.translate(japanese_text)
+            translated_text = translate.translate(japanese_text, from_code, to_code)
+            logging.info(f"Translated text: {translated_text}")
 
             logging.info("Offline translation completed successfully.")
             return japanese_text, translated_text
         except Exception as e:
-            logging.exception("Error during offline translation.")
-            return "-Unable to extract-", "-Unable to translate-"
+            logging.exception(f"Error during offline translation: {e}")
+            return f"-Error: {str(e)}-", f"-Error: {str(e)}-"
 
     @QtCore.pyqtSlot()
     def show_error(self):
