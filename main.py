@@ -4,9 +4,9 @@ import os
 import base64
 import requests
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsDropShadowEffect, QTextEdit, QVBoxLayout, QHBoxLayout, QLabel, QFrame
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QPen
-from PyQt5.QtCore import Qt, QRectF
+from PyQt5.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsDropShadowEffect, QTextEdit, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QLineEdit
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QPen, QDesktopServices
+from PyQt5.QtCore import Qt, QRectF, QUrl
 from PIL import Image
 import mss
 import openai
@@ -18,13 +18,13 @@ import time
 from urllib.error import URLError
 import cv2
 import numpy as np
+import tempfile
+import keyring
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Make sure set set this up in env variables
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-openai.api_key = OPENAI_API_KEY
+os.environ['TESSDATA_PREFIX'] = r'C:\Program Files\Tesseract-OCR\tessdata'
 
 API_URL = 'https://api.openai.com/v1/chat/completions'
 MODEL_NAME = 'gpt-4o-mini'
@@ -312,6 +312,7 @@ class TranslatorApp(QtWidgets.QWidget):
         self.init_ui()
         self.translation_ready.connect(self.update_translation_display)
         self.init_argos_translate()
+        self.setup_tesseract()
 
     def init_tesseract(self):
         # Specify the path to the Tesseract executable
@@ -323,6 +324,21 @@ class TranslatorApp(QtWidgets.QWidget):
             logging.info(f"Tesseract path set to: {tesseract_path}")
         else:
             logging.warning("Tesseract executable not found at the specified path. Make sure Tesseract is installed correctly.")
+
+    def setup_tesseract(self):
+        # Specify the path to the Tesseract executable
+        tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        if os.path.exists(tesseract_path):
+            pytesseract.pytesseract.tesseract_cmd = tesseract_path
+            logging.info(f"Tesseract path set to: {tesseract_path}")
+        else:
+            logging.warning("Tesseract executable not found at the specified path. Make sure Tesseract is installed correctly.")
+
+        # Set TESSDATA_PREFIX environment variable
+        tessdata_path = r'C:\Program Files\Tesseract-OCR\tessdata'
+        tessdata_path = os.path.normpath(tessdata_path)
+        os.environ['TESSDATA_PREFIX'] = tessdata_path
+        logging.info(f"TESSDATA_PREFIX set to: {tessdata_path}")
 
     def init_ui(self):
         logging.info("Initializing UI.")
@@ -425,6 +441,8 @@ class TranslatorApp(QtWidgets.QWidget):
         options_page_layout = QtWidgets.QVBoxLayout(self.options_page)
 
         # Translation Type Option
+        # Offline translation is not available yet because it is broken.
+        '''
         translation_type_layout = QtWidgets.QHBoxLayout()
         translation_type_label = QtWidgets.QLabel("Translation Type:")
         self.translation_type_combo = QtWidgets.QComboBox()
@@ -435,6 +453,7 @@ class TranslatorApp(QtWidgets.QWidget):
         translation_type_layout.addWidget(translation_type_label)
         translation_type_layout.addWidget(self.translation_type_combo)
         options_page_layout.addLayout(translation_type_layout)
+        '''
 
         # Minimum Window Size Option
         window_size_layout = QtWidgets.QHBoxLayout()
@@ -447,6 +466,34 @@ class TranslatorApp(QtWidgets.QWidget):
         window_size_layout.addWidget(window_size_label)
         window_size_layout.addWidget(self.window_size_combo)
         options_page_layout.addLayout(window_size_layout)
+
+        # API Key Input
+        api_key_layout = QtWidgets.QVBoxLayout()  # Changed to QVBoxLayout
+        api_key_input_layout = QtWidgets.QHBoxLayout()
+        api_key_label = QtWidgets.QLabel("OpenAI API Key:")
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setEchoMode(QLineEdit.Password)
+        self.api_key_input.setText(self.load_api_key())
+        self.api_key_input.textChanged.connect(self.save_api_key)
+        
+        self.api_key_toggle = QtWidgets.QPushButton("Show")
+        self.api_key_toggle.setCheckable(True)
+        self.api_key_toggle.toggled.connect(self.toggle_api_key_visibility)
+
+        api_key_input_layout.addWidget(api_key_label)
+        api_key_input_layout.addWidget(self.api_key_input)
+        api_key_input_layout.addWidget(self.api_key_toggle)
+        
+        api_key_layout.addLayout(api_key_input_layout)
+
+        # Add the "What is an API key?" link
+        api_key_link = QtWidgets.QLabel()
+        api_key_link.setText('<a href="https://help.openai.com/en/articles/7039783-how-can-i-access-the-chatgpt-api">What is an API key?</a>')
+        api_key_link.setOpenExternalLinks(True)
+        api_key_link.setStyleSheet("color: blue;")
+        api_key_layout.addWidget(api_key_link)
+
+        options_page_layout.addLayout(api_key_layout)
 
         # Add a stretch to push the back button to the bottom
         options_page_layout.addStretch(1)
@@ -495,6 +542,20 @@ class TranslatorApp(QtWidgets.QWidget):
     def update_minimum_window_size(self, new_size):
         self.minimum_window_size = int(new_size)
         logging.info(f"Minimum window size changed to: {self.minimum_window_size}")
+
+    def toggle_api_key_visibility(self, checked):
+        if checked:
+            self.api_key_input.setEchoMode(QLineEdit.Normal)
+            self.api_key_toggle.setText("Hide")
+        else:
+            self.api_key_input.setEchoMode(QLineEdit.Password)
+            self.api_key_toggle.setText("Show")
+
+    def save_api_key(self, api_key):
+        keyring.set_password("VisualTranslator", "openai_api_key", api_key)
+
+    def load_api_key(self):
+        return keyring.get_password("VisualTranslator", "openai_api_key") or ""
 
     def init_argos_translate(self):
         from_code = "ja"
@@ -648,15 +709,19 @@ class TranslatorApp(QtWidgets.QWidget):
             return self.perform_offline_translation(image_bytes)
         else:
             logging.info("Using online translation (OpenAI API).")
+            api_key = self.load_api_key()
+            if not api_key:
+                logging.error("No API key provided")
+                return "No API key provided", "No API key provided"
             for attempt in range(MAX_RETRIES):
-                japanese_text, english_text = self.call_openai_api(image_bytes)
+                japanese_text, english_text = self.call_openai_api(image_bytes, api_key)
                 if not (japanese_text.startswith("API") and english_text.startswith("API")):
                     return japanese_text, english_text
                 logging.warning(f"API call failed. Attempt {attempt + 1} of {MAX_RETRIES}")
             logging.error("All API call attempts failed")
-            return "APIコールが失敗しました", "All API call attempts failed"
+            return "All API call attempts failed", "All API call attempts failed"
 
-    def call_openai_api(self, image_bytes):
+    def call_openai_api(self, image_bytes, api_key):
         try:
             # Encode image to base64
             base64_image = base64.b64encode(image_bytes).decode('utf-8')
@@ -701,7 +766,7 @@ class TranslatorApp(QtWidgets.QWidget):
 
             headers = {
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {OPENAI_API_KEY}"
+                "Authorization": f"Bearer {api_key}"
             }
 
             logging.info("Sending request to OpenAI API.")
@@ -728,11 +793,11 @@ class TranslatorApp(QtWidgets.QWidget):
                 except json.JSONDecodeError as e:
                     logging.error(f"Failed to parse API response as JSON: {e}")
                     logging.error(f"Response content: {content}")
-                    return "API解析エラー", "API parsing error"
+                    return "API parsing error", "API parsing error"
                 except KeyError as e:
                     logging.error(f"Unexpected API response structure: {e}")
                     logging.error(f"Response content: {result}")
-                    return "API構造エラー", "API structure error"
+                    return "API structure error", "API structure error"
             else:
                 logging.error(f"API Error: {response.status_code}, {response.text}")
                 return f"APIエラー: {response.status_code}", f"API error: {response.status_code}"
@@ -752,17 +817,45 @@ class TranslatorApp(QtWidgets.QWidget):
             if angle != 0:
                 image = rotate_image(image, angle)
 
-            # Perform OCR with custom configuration
+            # Define tessdata directory
+            tessdata_dir = r'C:\Program Files\Tesseract-OCR\tessdata'
+            tessdata_dir = os.path.normpath(tessdata_dir)
+            logging.info(f"Tessdata directory: {tessdata_dir}")
+
+            # Verify jpn.traineddata exists
+            jpn_traineddata = os.path.join(tessdata_dir, 'jpn.traineddata')
+            logging.info(f"Checking for jpn.traineddata at: {jpn_traineddata}")
+            if not os.path.exists(jpn_traineddata):
+                logging.error(f"Japanese language data file not found at: {jpn_traineddata}")
+                return "-Error: Japanese language data file not found-", "-Error: Japanese language data file not found-"
+            else:
+                logging.info("jpn.traineddata file found.")
+
+            # Ensure TESSDATA_PREFIX is set correctly
+            os.environ['TESSDATA_PREFIX'] = tessdata_dir
+            logging.info(f"TESSDATA_PREFIX set to: {os.environ['TESSDATA_PREFIX']}")
+
+            # Construct the configuration string without quotes around tessdata_dir
+            config = (
+                f'--tessdata-dir {tessdata_dir} '
+                '--psm 6 --oem 1 '
+                '-c preserve_interword_spaces=1 '
+                '-c tessedit_write_images=true'
+            )
+            logging.info(f"Tesseract configuration: {config}")
+
+            # Perform OCR
             japanese_text = pytesseract.image_to_string(
                 image,
                 lang='jpn',
-                config='--psm 6 --oem 1 -c preserve_interword_spaces=1'
+                config=config,
             )
-            
-            # Post-process OCR results
-            japanese_text = post_process_ocr(japanese_text)
 
             logging.info(f"OCR result: {japanese_text}")
+
+            # Post-process OCR results
+            japanese_text = post_process_ocr(japanese_text)
+            logging.info(f"Post-processed OCR result: {japanese_text}")
 
             if not japanese_text.strip():
                 logging.warning("No text extracted by OCR.")
@@ -777,6 +870,7 @@ class TranslatorApp(QtWidgets.QWidget):
 
             logging.info("Offline translation completed successfully.")
             return japanese_text, translated_text
+
         except Exception as e:
             logging.exception(f"Error during offline translation: {e}")
             return f"-Error: {str(e)}-", f"-Error: {str(e)}-"
