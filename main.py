@@ -6,7 +6,7 @@ import requests
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsDropShadowEffect, QTextEdit, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QLineEdit, QGridLayout
 from PyQt5.QtGui import QIcon, QPainter, QColor, QPen
-from PyQt5.QtCore import Qt, QRectF, QUrl
+from PyQt5.QtCore import Qt, QRectF, QUrl, QTimer
 from PIL import Image
 import mss
 import openai
@@ -18,8 +18,8 @@ import time
 from urllib.error import URLError
 import cv2
 import numpy as np
-import tempfile
 import keyring
+import keyboard
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -313,6 +313,8 @@ class TranslatorApp(QtWidgets.QWidget):
         self.translation_ready.connect(self.update_translation_display)
         self.init_argos_translate()
         self.setup_tesseract()
+        self.init_hotkey()
+        self.selection_window = None  # Initialize selection_window attribute
 
     def init_tesseract(self):
         # Specify the path to the Tesseract executable
@@ -374,7 +376,6 @@ class TranslatorApp(QtWidgets.QWidget):
         # Main Layout
         self.main_layout = QtWidgets.QVBoxLayout()
         self.main_layout.setContentsMargins(10, 10, 10, 10)
-        self.main_layout.setSpacing(10)
 
         # Create a stacked widget to hold different pages
         self.stacked_widget = QtWidgets.QStackedWidget()
@@ -653,17 +654,30 @@ class TranslatorApp(QtWidgets.QWidget):
         
         return False
 
+    def init_hotkey(self):
+        try:
+            keyboard.add_hotkey('ctrl+alt+space', self.hotkey_triggered)
+            logging.info("Hotkey (Ctrl+Alt+Space) registered successfully.")
+        except Exception as e:
+            logging.error(f"Failed to register hotkey: {e}")
+
+    def hotkey_triggered(self):
+        logging.info("Hotkey triggered. Initiating screenshot capture.")
+        # Use QTimer to call capture_screenshot from the main thread
+        QTimer.singleShot(0, self.capture_screenshot)
+
     def capture_screenshot(self):
         try:
             logging.info("Starting screenshot capture.")
-            self.hide()  # Hide the main window during selection
-
-            self.selection_window = SelectionWindow()
-            self.selection_window.selection_made.connect(self.on_selection_made)
+            
+            if self.selection_window is None:
+                self.selection_window = SelectionWindow()
+                self.selection_window.selection_made.connect(self.on_selection_made)
+            
             self.selection_window.show()
+            self.selection_window.activateWindow()  # Ensure the selection window is in focus
         except Exception as e:
             logging.exception("Failed to initiate screenshot capture.")
-            self.show()
 
     def on_selection_made(self, rect):
         try:
@@ -703,7 +717,6 @@ class TranslatorApp(QtWidgets.QWidget):
             self.process_image(img)
         except Exception as e:
             logging.exception("Failed during screenshot processing.")
-            self.show()
 
     def process_image(self, pil_image):
         logging.info("Processing captured image.")
@@ -917,6 +930,10 @@ def main():
     app.setWindowIcon(QIcon('images/v-letter.svg'))
     translator = TranslatorApp()
     translator.show()
+    
+    # Keep the application running in the background
+    # app.setQuitOnLastWindowClosed(False)
+    
     sys.exit(app.exec_())
 
 if __name__ == '__main__':
