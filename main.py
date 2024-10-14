@@ -9,74 +9,20 @@ from PyQt5.QtGui import QIcon, QPainter, QColor, QPen
 from PyQt5.QtCore import Qt, QRectF, QUrl, QTimer
 from PIL import Image
 import mss
-import openai
 import logging
-import pytesseract
-from argostranslate import package, translate
 import json
-import time
-from urllib.error import URLError
-import cv2
-import numpy as np
 import keyring
 import keyboard
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-os.environ['TESSDATA_PREFIX'] = r'C:\Program Files\Tesseract-OCR\tessdata'
-
 API_URL = 'https://api.openai.com/v1/chat/completions'
 MODEL_NAME = 'gpt-4o-mini'
 
-# Add this constant near the top of the file, after imports
-MINIMUM_WINDOW_SIZE = 70  # Default value
+MINIMUM_WINDOW_WIDTH = 70
+MINIMUM_WINDOW_HEIGHT = 40 
 MAX_RETRIES = 2 # Maximum number of retries for API calls
-
-def preprocess_image(image):
-    # Convert PIL Image to OpenCV format
-    cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-    # Convert to grayscale
-    gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
-    # Apply thresholding
-    thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-    # Apply dilation
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3,3))
-    dilated = cv2.dilate(thresh, kernel, iterations=1)
-    # Convert back to PIL Image
-    return Image.fromarray(cv2.cvtColor(dilated, cv2.COLOR_BGR2RGB))
-
-def scale_image(image, scale_factor=2):
-    width, height = image.size
-    return image.resize((width * scale_factor, height * scale_factor), Image.LANCZOS)
-
-def detect_orientation(image):
-    # Convert PIL Image to OpenCV format
-    cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-    # Convert to grayscale
-    gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
-    # Detect orientation
-    coords = np.column_stack(np.where(gray > 0))
-    angle = cv2.minAreaRect(coords)[-1]
-    if angle < -45:
-        angle = -(90 + angle)
-    else:
-        angle = -angle
-    return angle
-
-def rotate_image(image, angle):
-    return image.rotate(angle, expand=True)
-
-def post_process_ocr(text):
-    # Replace common misrecognitions
-    corrections = {
-        '0': '〇',
-        '1': '一',
-        # Add more based on observed errors
-    }
-    for wrong, correct in corrections.items():
-        text = text.replace(wrong, correct)
-    return text
 
 class SelectionWindow(QtWidgets.QWidget):
     selection_made = QtCore.pyqtSignal(QtCore.QRect)
@@ -306,41 +252,10 @@ class TranslatorApp(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
         self.translation_windows = []
-        self.translation_type = "Online"  # Default to Online translation
-        self.minimum_window_size = MINIMUM_WINDOW_SIZE  # Initialize with default value
-        self.init_tesseract()
         self.init_ui()
         self.translation_ready.connect(self.update_translation_display)
-        self.init_argos_translate()
-        self.setup_tesseract()
         self.init_hotkey()
         self.selection_window = None  # Initialize selection_window attribute
-
-    def init_tesseract(self):
-        # Specify the path to the Tesseract executable
-        tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # for Windows
-        # tesseract_path = '/usr/local/bin/tesseract'  # Example for macOS/Linux
-        
-        if os.path.exists(tesseract_path):
-            pytesseract.pytesseract.tesseract_cmd = tesseract_path
-            logging.info(f"Tesseract path set to: {tesseract_path}")
-        else:
-            logging.warning("Tesseract executable not found at the specified path. Make sure Tesseract is installed correctly.")
-
-    def setup_tesseract(self):
-        # Specify the path to the Tesseract executable
-        tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-        if os.path.exists(tesseract_path):
-            pytesseract.pytesseract.tesseract_cmd = tesseract_path
-            logging.info(f"Tesseract path set to: {tesseract_path}")
-        else:
-            logging.warning("Tesseract executable not found at the specified path. Make sure Tesseract is installed correctly.")
-
-        # Set TESSDATA_PREFIX environment variable
-        tessdata_path = r'C:\Program Files\Tesseract-OCR\tessdata'
-        tessdata_path = os.path.normpath(tessdata_path)
-        os.environ['TESSDATA_PREFIX'] = tessdata_path
-        logging.info(f"TESSDATA_PREFIX set to: {tessdata_path}")
 
     def init_ui(self):
         logging.info("Initializing UI.")
@@ -453,25 +368,6 @@ class TranslatorApp(QtWidgets.QWidget):
         options_page_layout = QtWidgets.QVBoxLayout(self.options_page)
         options_page_layout.setSpacing(15)
 
-        # Minimum Window Size Option
-        window_size_layout = QtWidgets.QHBoxLayout()
-        window_size_label = QtWidgets.QLabel("Minimum Window Size (pixels):")
-        self.window_size_combo = QtWidgets.QComboBox()
-        self.window_size_combo.addItems(["70", "80", "90", "100"])
-        self.window_size_combo.setCurrentText(str(self.minimum_window_size))
-        self.window_size_combo.currentTextChanged.connect(self.update_minimum_window_size)
-        self.window_size_combo.setStyleSheet("""
-            QComboBox {
-                padding: 5px;
-                border: 1px solid #ccc;
-                border-radius: 3px;
-            }
-        """)
-
-        window_size_layout.addWidget(window_size_label)
-        window_size_layout.addWidget(self.window_size_combo)
-        options_page_layout.addLayout(window_size_layout)
-
         # API Key Input
         api_key_layout = QtWidgets.QVBoxLayout()
         api_key_input_layout = QtWidgets.QHBoxLayout()
@@ -550,14 +446,6 @@ class TranslatorApp(QtWidgets.QWidget):
     def show_main(self):
         self.stacked_widget.setCurrentWidget(self.main_page)
 
-    def update_translation_type(self, new_type):
-        self.translation_type = new_type
-        logging.info(f"Translation type changed to: {self.translation_type}")
-
-    def update_minimum_window_size(self, new_size):
-        self.minimum_window_size = int(new_size)
-        logging.info(f"Minimum window size changed to: {self.minimum_window_size}")
-
     def toggle_api_key_visibility(self, checked):
         if checked:
             self.api_key_input.setEchoMode(QLineEdit.Normal)
@@ -571,88 +459,6 @@ class TranslatorApp(QtWidgets.QWidget):
 
     def load_api_key(self):
         return keyring.get_password("VisualTranslator", "openai_api_key") or ""
-
-    def init_argos_translate(self):
-        from_code = "ja"
-        to_code = "en"
-        success = self.download_and_install_argos_package(from_code, to_code)
-        if success:
-            logging.info(f"Argos Translate is ready for {from_code} to {to_code} translation.")
-        else:
-            logging.error(f"Failed to set up Argos Translate for {from_code} to {to_code} translation.")
-
-    def download_and_install_argos_package(self, from_code, to_code, max_retries=3):
-        for attempt in range(max_retries):
-            try:
-                # Check if the translation package is already installed
-                installed_languages = translate.get_installed_languages()
-                if self.is_translation_available(installed_languages, from_code, to_code):
-                    logging.info(f"{from_code} to {to_code} translation is already available.")
-                    return True
-
-                # Update package index
-                package.update_package_index()
-                available_packages = package.get_available_packages()
-
-                # Find the desired package
-                desired_package = next(
-                    (pkg for pkg in available_packages if pkg.from_code == from_code and pkg.to_code == to_code),
-                    None
-                )
-
-                if desired_package:
-                    # Download and install the package
-                    download_path = desired_package.download()
-                    package.install_from_path(download_path)
-                    logging.info(f"Installed Argos Translate package: {from_code} to {to_code}")
-
-                    # Reload installed languages to refresh the state
-                    translate.load_installed_languages()
-                    installed_languages = translate.get_installed_languages()
-
-                    # Verify installation
-                    if self.is_translation_available(installed_languages, from_code, to_code):
-                        logging.info(f"{from_code} to {to_code} translation is now available.")
-                        return True
-                    else:
-                        logging.warning(f"{from_code} to {to_code} translation not found after installation. Retrying...")
-                else:
-                    logging.error(f"No available Argos Translate package for {from_code} to {to_code}.")
-                    return False
-
-            except URLError as e:
-                logging.error(f"Network error occurred: {e}. Retrying in 5 seconds...")
-                time.sleep(5)
-            except Exception as e:
-                logging.exception(f"An error occurred while managing Argos Translate package: {e}")
-                if attempt < max_retries - 1:
-                    logging.info(f"Retrying in 5 seconds... (Attempt {attempt + 2} of {max_retries})")
-                    time.sleep(5)
-                else:
-                    logging.error("Max retries reached. Unable to install the package.")
-                    return False
-
-        logging.error(f"Failed to install {from_code} to {to_code} translation after {max_retries} attempts.")
-        return False
-
-    def is_translation_available(self, installed_languages, from_code, to_code):
-        from_lang = next((lang for lang in installed_languages if lang.code == from_code), None)
-        to_lang = next((lang for lang in installed_languages if lang.code == to_code), None)
-        
-        if from_lang and to_lang:
-            translation = from_lang.get_translation(to_lang)
-            if translation:
-                logging.info(f"Translation from '{from_code}' to '{to_code}' is available.")
-                return True
-            else:
-                logging.info(f"Translation from '{from_code}' to '{to_code}' is NOT available.")
-        else:
-            if not from_lang:
-                logging.info(f"Source language '{from_code}' is not installed.")
-            if not to_lang:
-                logging.info(f"Target language '{to_code}' is not installed.")
-        
-        return False
 
     def init_hotkey(self):
         try:
@@ -688,8 +494,8 @@ class TranslatorApp(QtWidgets.QWidget):
                 monitor = {
                     "left": rect.left(),
                     "top": rect.top(),
-                    "width": max(rect.width(), self.minimum_window_size),
-                    "height": max(rect.height(), self.minimum_window_size)
+                    "width": max(rect.width(), MINIMUM_WINDOW_WIDTH),
+                    "height": max(rect.height(), MINIMUM_WINDOW_HEIGHT)
                 }
                 logging.info(f"Capturing screen: {monitor}")
                 screenshot = sct.grab(monitor)
@@ -709,7 +515,7 @@ class TranslatorApp(QtWidgets.QWidget):
                 self.selection_window = None
 
             # Show the translation window with "Translating..." text immediately
-            self.translation_window = TranslationDisplayWindow("Translating...", self.selected_rect, self.minimum_window_size)
+            self.translation_window = TranslationDisplayWindow("Translating...", self.selected_rect, MINIMUM_WINDOW_WIDTH, MINIMUM_WINDOW_HEIGHT)
             self.translation_window.show()
             self.translation_windows.append(self.translation_window)
 
@@ -731,22 +537,18 @@ class TranslatorApp(QtWidgets.QWidget):
         QtCore.QThreadPool.globalInstance().start(translation_task)
 
     def perform_translation(self, image_bytes):
-        if self.translation_type == "Offline":
-            logging.info("Using offline translation.")
-            return self.perform_offline_translation(image_bytes)
-        else:
-            logging.info("Using online translation (OpenAI API).")
-            api_key = self.load_api_key()
-            if not api_key:
-                logging.error("No API key provided")
-                return "No API key provided", "No API key provided"
-            for attempt in range(MAX_RETRIES):
-                japanese_text, english_text = self.call_openai_api(image_bytes, api_key)
-                if not (japanese_text.startswith("API") and english_text.startswith("API")):
-                    return japanese_text, english_text
-                logging.warning(f"API call failed. Attempt {attempt + 1} of {MAX_RETRIES}")
-            logging.error("All API call attempts failed")
-            return "All API call attempts failed", "All API call attempts failed"
+        logging.info("Using online translation (OpenAI API).")
+        api_key = self.load_api_key()
+        if not api_key:
+            logging.error("No API key provided")
+            return "No API key provided", "No API key provided"
+        for attempt in range(MAX_RETRIES):
+            japanese_text, english_text = self.call_openai_api(image_bytes, api_key)
+            if not (japanese_text.startswith("API") and english_text.startswith("API")):
+                return japanese_text, english_text
+            logging.warning(f"API call failed. Attempt {attempt + 1} of {MAX_RETRIES}")
+        logging.error("All API call attempts failed")
+        return "All API call attempts failed", "All API call attempts failed"
 
     def call_openai_api(self, image_bytes, api_key):
         try:
@@ -832,76 +634,6 @@ class TranslatorApp(QtWidgets.QWidget):
             logging.exception("Exception occurred during API call.")
             return "APIコールエラー", f"API call error: {str(e)}"
 
-    def perform_offline_translation(self, image_bytes):
-        try:
-            # Open and preprocess the image
-            image = Image.open(io.BytesIO(image_bytes))
-            image = preprocess_image(image)
-            image = scale_image(image)
-
-            # Detect and correct orientation
-            angle = detect_orientation(image)
-            if angle != 0:
-                image = rotate_image(image, angle)
-
-            # Define tessdata directory
-            tessdata_dir = r'C:\Program Files\Tesseract-OCR\tessdata'
-            tessdata_dir = os.path.normpath(tessdata_dir)
-            logging.info(f"Tessdata directory: {tessdata_dir}")
-
-            # Verify jpn.traineddata exists
-            jpn_traineddata = os.path.join(tessdata_dir, 'jpn.traineddata')
-            logging.info(f"Checking for jpn.traineddata at: {jpn_traineddata}")
-            if not os.path.exists(jpn_traineddata):
-                logging.error(f"Japanese language data file not found at: {jpn_traineddata}")
-                return "-Error: Japanese language data file not found-", "-Error: Japanese language data file not found-"
-            else:
-                logging.info("jpn.traineddata file found.")
-
-            # Ensure TESSDATA_PREFIX is set correctly
-            os.environ['TESSDATA_PREFIX'] = tessdata_dir
-            logging.info(f"TESSDATA_PREFIX set to: {os.environ['TESSDATA_PREFIX']}")
-
-            # Construct the configuration string without quotes around tessdata_dir
-            config = (
-                f'--tessdata-dir {tessdata_dir} '
-                '--psm 6 --oem 1 '
-                '-c preserve_interword_spaces=1 '
-                '-c tessedit_write_images=true'
-            )
-            logging.info(f"Tesseract configuration: {config}")
-
-            # Perform OCR
-            japanese_text = pytesseract.image_to_string(
-                image,
-                lang='jpn',
-                config=config,
-            )
-
-            logging.info(f"OCR result: {japanese_text}")
-
-            # Post-process OCR results
-            japanese_text = post_process_ocr(japanese_text)
-            logging.info(f"Post-processed OCR result: {japanese_text}")
-
-            if not japanese_text.strip():
-                logging.warning("No text extracted by OCR.")
-                return "-Unable to extract-", "-Unable to translate-"
-
-            # Use Argos Translate to translate the text
-            from_code = "ja"
-            to_code = "en"
-
-            translated_text = translate.translate(japanese_text, from_code, to_code)
-            logging.info(f"Translated text: {translated_text}")
-
-            logging.info("Offline translation completed successfully.")
-            return japanese_text, translated_text
-
-        except Exception as e:
-            logging.exception(f"Error during offline translation: {e}")
-            return f"-Error: {str(e)}-", f"-Error: {str(e)}-"
-
     @QtCore.pyqtSlot()
     def show_error(self):
         QtWidgets.QMessageBox.critical(self, "Error", "Failed to get translation.")
@@ -924,6 +656,157 @@ class TranslatorApp(QtWidgets.QWidget):
         logging.debug(f"Displayed Japanese text: {japanese_text}")
         logging.debug(f"Displayed English text: {english_text}")
 
+class TranslationDisplayWindow(QGraphicsView):
+    def __init__(self, initial_text, rect, minimum_width, minimum_height):
+        super().__init__()
+        self.setWindowFlags(
+            Qt.WindowStaysOnTopHint |
+            Qt.FramelessWindowHint |
+            Qt.Tool
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setStyleSheet("background: transparent;")
+        # Enforce minimum size
+        adjusted_rect = self.adjust_rect_to_minimum_size(rect, minimum_width, minimum_height)
+        self.setGeometry(adjusted_rect)
+
+        # Disable scroll bars
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        # Create scene and set it to the view
+        self.scene = QGraphicsScene(self)
+        self.setScene(self.scene)
+
+        # Create a pixmap item for the background
+        self.background = QGraphicsPixmapItem()
+        self.scene.addItem(self.background)
+
+        # Create blur effect
+        self.blur_effect = QGraphicsBlurEffect()
+        self.blur_effect.setBlurRadius(10)
+        self.background.setGraphicsEffect(self.blur_effect)
+
+        # Create semi-transparent overlay
+        self.overlay = self.scene.addRect(QRectF(self.rect()), QPen(Qt.NoPen), QColor(255, 255, 255, 100))
+
+        # Create text item
+        self.text_item = self.scene.addText(initial_text)
+        self.text_item.setDefaultTextColor(Qt.black)
+
+        # Add drop shadow effect to the text
+        shadow_effect = QGraphicsDropShadowEffect()
+        shadow_effect.setBlurRadius(5)
+        shadow_effect.setOffset(2, 2)
+        shadow_effect.setColor(QColor(0, 0, 0, 50))
+        self.text_item.setGraphicsEffect(shadow_effect)
+
+        # Center the text
+        self.center_text()
+
+        # Create close button
+        close_button = QtWidgets.QPushButton("X", self)
+        close_button.setFixedSize(24, 24)
+        close_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(0, 0, 0, 100);
+                color: white;
+                border: none;
+                border-radius: 12px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 0, 0, 150);
+            }
+        """)
+        close_button.clicked.connect(self.close)
+        close_button.move(self.width() - 30, 5)
+
+    def center_text(self):
+        text_rect = self.text_item.boundingRect()
+        self.text_item.setPos((self.width() - text_rect.width()) / 2, (self.height() - text_rect.height()) / 2)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.updateBackground()
+        self.overlay.setRect(QRectF(self.rect()))
+        self.text_item.setTextWidth(self.width() - 20)
+
+        # Re-center the text on resize
+        self.center_text()
+
+    def updateBackground(self):
+        desktop = QApplication.desktop().screenNumber(QApplication.desktop().cursor().pos())
+        screen = QApplication.screens()[desktop]
+        pixmap = screen.grabWindow(0, self.x(), self.y(), self.width(), self.height())
+        self.background.setPixmap(pixmap)
+
+    def calculate_font_size(self, text):
+        max_font_size = 72  # Increased maximum font size
+        min_font_size = 10
+        margin = 20
+        available_height = self.height() - 2 * margin
+        available_width = self.width() - 2 * margin
+
+        # Binary search for the optimal font size
+        low, high = min_font_size, max_font_size
+        optimal_size = min_font_size
+
+        while low <= high:
+            mid = (low + high) // 2
+            font = self.text_item.font()
+            font.setPointSize(mid)
+            self.text_item.setFont(font)
+            self.text_item.setTextWidth(available_width)
+            text_rect = self.text_item.boundingRect()
+
+            if text_rect.width() <= available_width and text_rect.height() <= available_height:
+                optimal_size = mid
+                low = mid + 1  # Try a larger size
+            else:
+                high = mid - 1  # Try a smaller size
+
+        return optimal_size
+
+    def update_text(self, new_text):
+        self.text_item.setPlainText(new_text)
+        
+        # Calculate and set the appropriate font size
+        font_size = self.calculate_font_size(new_text)
+        font = self.text_item.font()
+        font.setPointSize(font_size)
+        self.text_item.setFont(font)
+        
+        margin = 20
+        self.text_item.setTextWidth(self.width() - 2 * margin)
+        
+        # Enable word wrap
+        text_option = QtGui.QTextOption()
+        text_option.setWrapMode(QtGui.QTextOption.WordWrap)
+        self.text_item.document().setDefaultTextOption(text_option)
+        
+        # Re-center the text
+        self.center_text()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QColor(200, 200, 200, 100))
+        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 10, 10)
+
+    def wheelEvent(self, event):
+        # Override to disable scrolling with the mouse wheel
+        event.ignore()
+
+    def adjust_rect_to_minimum_size(self, rect, minimum_width, minimum_height):
+        width = max(rect.width(), minimum_width)
+        height = max(rect.height(), minimum_height)
+        return QtCore.QRect(rect.x(), rect.y(), width, height)
+
+    # ... rest of the existing methods ...
+
 def main():
     logging.info("Starting Visual Translator application.")
     app = QtWidgets.QApplication(sys.argv)
@@ -931,7 +814,7 @@ def main():
     translator = TranslatorApp()
     translator.show()
     
-    # Keep the application running in the background
+    # Keep the application running in the background with the below. Works even if you close the window. Not sure why you'd want this but here it is.
     # app.setQuitOnLastWindowClosed(False)
     
     sys.exit(app.exec_())
