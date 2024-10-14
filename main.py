@@ -743,7 +743,7 @@ class TranslationDisplayWindow(QGraphicsView):
         self.background.setPixmap(pixmap)
 
     def calculate_font_size(self, text):
-        max_font_size = 72  # Increased maximum font size
+        max_font_size = 72 
         min_font_size = 10
         margin = 20
         available_height = self.height() - 2 * margin
