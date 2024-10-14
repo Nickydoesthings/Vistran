@@ -4,8 +4,8 @@ import os
 import base64
 import requests
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsDropShadowEffect, QTextEdit, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QLineEdit
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QPen, QDesktopServices
+from PyQt5.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsDropShadowEffect, QTextEdit, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QLineEdit, QGridLayout
+from PyQt5.QtGui import QIcon, QPainter, QColor, QPen
 from PyQt5.QtCore import Qt, QRectF, QUrl
 from PIL import Image
 import mss
@@ -343,10 +343,38 @@ class TranslatorApp(QtWidgets.QWidget):
     def init_ui(self):
         logging.info("Initializing UI.")
         self.setWindowTitle('Vistran: Visual Translator')
-        self.setGeometry(100, 100, 300, 200)  # Adjusted size for the simplified layout
+        self.setGeometry(100, 100, 400, 400)  # Adjusted size for better layout
+
+        # Set the main window style
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #f0f0f0;
+                border-radius: 10px;
+            }
+            QLabel {
+                font-weight: bold;
+                font-size: 14px;
+                color: #333;
+            }
+            QPushButton {
+                padding: 10px 20px;
+                font-size: 16px;
+                border: none;
+                border-radius: 5px;
+            }
+            QTextEdit {
+                background-color: white;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+                padding: 5px;
+                font-size: 14px;
+            }
+        """)
 
         # Main Layout
         self.main_layout = QtWidgets.QVBoxLayout()
+        self.main_layout.setContentsMargins(10, 10, 10, 10)
+        self.main_layout.setSpacing(10)
 
         # Create a stacked widget to hold different pages
         self.stacked_widget = QtWidgets.QStackedWidget()
@@ -355,17 +383,14 @@ class TranslatorApp(QtWidgets.QWidget):
         # Create main page
         self.main_page = QtWidgets.QWidget()
         main_page_layout = QtWidgets.QVBoxLayout(self.main_page)
+        main_page_layout.setSpacing(10)
 
         # Capture Button
         self.capture_button = QtWidgets.QPushButton('Capture Screenshot', self)
         self.capture_button.setStyleSheet("""
             QPushButton {
-                padding: 10px 20px;
-                font-size: 16px;
                 background-color: #4CAF50;
                 color: white;
-                border: none;
-                border-radius: 5px;
             }
             QPushButton:hover {
                 background-color: #45a049;
@@ -375,62 +400,48 @@ class TranslatorApp(QtWidgets.QWidget):
         main_page_layout.addWidget(self.capture_button)
 
         # Create text display areas
-        text_display_layout = QVBoxLayout()  # Changed to QVBoxLayout
+        text_display_layout = QGridLayout()
+        text_display_layout.setVerticalSpacing(2)  # Minimal spacing between rows
+        text_display_layout.setHorizontalSpacing(10)  # Space between columns if needed
 
-        # Japanese text box
-        japanese_layout = QVBoxLayout()
-        japanese_label = QLabel("Japanese Text:")
-        japanese_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        # Detected text box
+        japanese_label = QLabel("Detected Text:")
         self.japanese_text_display = QTextEdit(self)
         self.japanese_text_display.setReadOnly(True)
-        self.japanese_text_display.setStyleSheet("""
-            QTextEdit {
-                background-color: #f0f0f0;
-                border: 1px solid #ccc;
-                border-radius: 5px;
-                padding: 5px;
-                font-size: 14px;
-            }
-        """)
-        japanese_layout.addWidget(japanese_label)
-        japanese_layout.addWidget(self.japanese_text_display)
+        self.japanese_text_display.setMinimumHeight(100)
 
-        # English text box
-        english_layout = QVBoxLayout()
-        english_label = QLabel("English Translation:")
-        english_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        # Translation text box
+        english_label = QLabel("Translation:")
         self.english_text_display = QTextEdit(self)
         self.english_text_display.setReadOnly(True)
-        self.english_text_display.setStyleSheet("""
-            QTextEdit {
-                background-color: #f0f0f0;
-                border: 1px solid #ccc;
-                border-radius: 5px;
-                padding: 5px;
-                font-size: 14px;
-            }
-        """)
-        english_layout.addWidget(english_label)
-        english_layout.addWidget(self.english_text_display)
+        self.english_text_display.setMinimumHeight(100)
 
-        text_display_layout.addLayout(japanese_layout)
-        text_display_layout.addLayout(english_layout)
+        # Add widgets to the grid
+        text_display_layout.addWidget(japanese_label, 0, 0)
+        text_display_layout.addWidget(self.japanese_text_display, 1, 0)
+        text_display_layout.addWidget(english_label, 3, 0)
+        text_display_layout.addWidget(self.english_text_display, 4, 0)
+
+        # Add a spacer item between Japanese and English sections
+        spacer_item = QtWidgets.QSpacerItem(20, 10, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed)
+        text_display_layout.addItem(spacer_item, 2, 0)
+
+        # Set row stretches to make text boxes expand, not labels
+        text_display_layout.setRowStretch(1, 1)
+        text_display_layout.setRowStretch(4, 1)
 
         main_page_layout.addLayout(text_display_layout)
+        main_page_layout.setStretchFactor(text_display_layout, 1)
 
         # Options Button
         self.options_button = QtWidgets.QPushButton('Options', self)
         self.options_button.setStyleSheet("""
             QPushButton {
-                padding: 10px 20px;
-                font-size: 16px;
-                background-color: #D3D3D3;
-                color: black;
-                border: none;
-                border-radius: 5px;
+                background-color: #6C757D;
+                color: white;
             }
             QPushButton:hover {
-                background-color: #C0C0C0;
+                background-color: #5A6268;
             }
         """)
         self.options_button.clicked.connect(self.show_options)
@@ -439,21 +450,7 @@ class TranslatorApp(QtWidgets.QWidget):
         # Create options page
         self.options_page = QtWidgets.QWidget()
         options_page_layout = QtWidgets.QVBoxLayout(self.options_page)
-
-        # Translation Type Option
-        # Offline translation is not available yet because it is broken.
-        '''
-        translation_type_layout = QtWidgets.QHBoxLayout()
-        translation_type_label = QtWidgets.QLabel("Translation Type:")
-        self.translation_type_combo = QtWidgets.QComboBox()
-        self.translation_type_combo.addItems(["Online", "Offline"])
-        self.translation_type_combo.setCurrentText(self.translation_type)
-        self.translation_type_combo.currentTextChanged.connect(self.update_translation_type)
-
-        translation_type_layout.addWidget(translation_type_label)
-        translation_type_layout.addWidget(self.translation_type_combo)
-        options_page_layout.addLayout(translation_type_layout)
-        '''
+        options_page_layout.setSpacing(15)
 
         # Minimum Window Size Option
         window_size_layout = QtWidgets.QHBoxLayout()
@@ -462,23 +459,47 @@ class TranslatorApp(QtWidgets.QWidget):
         self.window_size_combo.addItems(["70", "80", "90", "100"])
         self.window_size_combo.setCurrentText(str(self.minimum_window_size))
         self.window_size_combo.currentTextChanged.connect(self.update_minimum_window_size)
+        self.window_size_combo.setStyleSheet("""
+            QComboBox {
+                padding: 5px;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+            }
+        """)
 
         window_size_layout.addWidget(window_size_label)
         window_size_layout.addWidget(self.window_size_combo)
         options_page_layout.addLayout(window_size_layout)
 
         # API Key Input
-        api_key_layout = QtWidgets.QVBoxLayout()  # Changed to QVBoxLayout
+        api_key_layout = QtWidgets.QVBoxLayout()
         api_key_input_layout = QtWidgets.QHBoxLayout()
         api_key_label = QtWidgets.QLabel("OpenAI API Key:")
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.Password)
         self.api_key_input.setText(self.load_api_key())
         self.api_key_input.textChanged.connect(self.save_api_key)
+        self.api_key_input.setStyleSheet("""
+            QLineEdit {
+                padding: 5px;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+            }
+        """)
         
         self.api_key_toggle = QtWidgets.QPushButton("Show")
         self.api_key_toggle.setCheckable(True)
         self.api_key_toggle.toggled.connect(self.toggle_api_key_visibility)
+        self.api_key_toggle.setStyleSheet("""
+            QPushButton {
+                padding: 5px 10px;
+                background-color: #f0f0f0;
+                color: #333;
+            }
+            QPushButton:hover {
+                background-color: #e0e0e0;
+            }
+        """)
 
         api_key_input_layout.addWidget(api_key_label)
         api_key_input_layout.addWidget(self.api_key_input)
@@ -502,15 +523,11 @@ class TranslatorApp(QtWidgets.QWidget):
         self.back_button = QtWidgets.QPushButton('Back', self)
         self.back_button.setStyleSheet("""
             QPushButton {
-                padding: 10px 20px;
-                font-size: 16px;
-                background-color: #D3D3D3;
-                color: black;
-                border: none;
-                border-radius: 5px;
+                background-color: #6C757D;
+                color: white;
             }
             QPushButton:hover {
-                background-color: #C0C0C0;
+                background-color: #5A6268;
             }
         """)
         self.back_button.clicked.connect(self.show_main)
@@ -523,11 +540,8 @@ class TranslatorApp(QtWidgets.QWidget):
         self.setLayout(self.main_layout)
         logging.info("UI initialized.")
 
-        # Set the default size of the window
-        self.resize(400, 300)  # Width: 800px, Height: 600px
-
-        # Optionally, set a minimum size
-        self.setMinimumSize(400, 200)
+        # Set the minimum size of the window
+        self.setMinimumSize(400, 400)
 
     def show_options(self):
         self.stacked_widget.setCurrentWidget(self.options_page)
