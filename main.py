@@ -26,6 +26,7 @@ MAX_RETRIES = 2 # Maximum number of retries for API calls
 
 class SelectionWindow(QtWidgets.QWidget):
     selection_made = QtCore.pyqtSignal(QtCore.QRect)
+    selection_cancelled = QtCore.pyqtSignal()  # New signal for cancellation
 
     def __init__(self):
         super().__init__()
@@ -56,6 +57,8 @@ class SelectionWindow(QtWidgets.QWidget):
             self.origin = event.pos()
             self.rubberBand.setGeometry(QtCore.QRect(self.origin, QtCore.QSize()))
             self.rubberBand.show()
+        elif event.button() == QtCore.Qt.RightButton:
+            self.cancel_selection()
 
     def mouseMoveEvent(self, event):
         if self.rubberBand.isVisible():
@@ -67,6 +70,14 @@ class SelectionWindow(QtWidgets.QWidget):
             selected_rect = QtCore.QRect(self.origin, event.pos()).normalized()
             self.selection_made.emit(selected_rect)
             self.close()
+
+    def keyPressEvent(self, event):
+        if event.key() == QtCore.Qt.Key_Escape:
+            self.cancel_selection()
+
+    def cancel_selection(self):
+        self.selection_cancelled.emit()
+        self.close()
 
     def closeEvent(self, event):
         logging.info("SelectionWindow is closing.")
@@ -479,11 +490,19 @@ class TranslatorApp(QtWidgets.QWidget):
             if self.selection_window is None:
                 self.selection_window = SelectionWindow()
                 self.selection_window.selection_made.connect(self.on_selection_made)
+                self.selection_window.selection_cancelled.connect(self.on_selection_cancelled)  # New connection
             
             self.selection_window.show()
             self.selection_window.activateWindow()  # Ensure the selection window is in focus
         except Exception as e:
             logging.exception("Failed to initiate screenshot capture.")
+
+    def on_selection_cancelled(self):
+        logging.info("Screenshot selection cancelled by user.")
+        if self.selection_window:
+            self.selection_window.close()
+            self.selection_window.deleteLater()
+            self.selection_window = None
 
     def on_selection_made(self, rect):
         try:
