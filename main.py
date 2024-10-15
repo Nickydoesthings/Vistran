@@ -4,7 +4,7 @@ import os
 import base64
 import requests
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsDropShadowEffect, QTextEdit, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QLineEdit, QGridLayout
+from PyQt5.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsDropShadowEffect, QTextEdit, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QLineEdit, QGridLayout, QComboBox
 from PyQt5.QtGui import QIcon, QPainter, QColor, QPen
 from PyQt5.QtCore import Qt, QRectF, QUrl, QTimer
 from PIL import Image
@@ -244,11 +244,11 @@ class TranslationTask(QtCore.QRunnable):
 
     def run(self):
         # Perform the translation in the background
-        japanese_text, english_text = self.app_instance.perform_translation(self.img_bytes)
-        if japanese_text and english_text:
+        detected_language, original_text, translated_text = self.app_instance.perform_translation(self.img_bytes)
+        if detected_language and original_text and translated_text:
             logging.info("Translation successful.")
-            # Emit the signal with both Japanese and English text
-            self.app_instance.translation_ready.emit(japanese_text, english_text)
+            # Emit the signal with detected language, original text, and translated text
+            self.app_instance.translation_ready.emit(detected_language, original_text, translated_text)
         else:
             logging.error("Translation failed.")
             QtCore.QMetaObject.invokeMethod(
@@ -258,15 +258,17 @@ class TranslationTask(QtCore.QRunnable):
             )
 
 class TranslatorApp(QtWidgets.QWidget):
-    translation_ready = QtCore.pyqtSignal(str, str)  # Emits both Japanese and English text
+    translation_ready = QtCore.pyqtSignal(str, str, str)  # Emits detected language, original text, and translated text
 
     def __init__(self):
         super().__init__()
         self.translation_windows = []
+        self.target_language = "Autodetect"
         self.init_ui()
         self.translation_ready.connect(self.update_translation_display)
         self.init_hotkey()
         self.selection_window = None  # Initialize selection_window attribute
+        self.target_language = "Autodetect"
 
     def init_ui(self):
         logging.info("Initializing UI.")
@@ -328,28 +330,28 @@ class TranslatorApp(QtWidgets.QWidget):
 
         # Create text display areas
         text_display_layout = QGridLayout()
-        text_display_layout.setVerticalSpacing(2)  # Minimal spacing between rows
-        text_display_layout.setHorizontalSpacing(10)  # Space between columns if needed
+        text_display_layout.setVerticalSpacing(2)
+        text_display_layout.setHorizontalSpacing(10)
 
-        # Detected text box
-        japanese_label = QLabel("Detected Text:")
-        self.japanese_text_display = QTextEdit(self)
-        self.japanese_text_display.setReadOnly(True)
-        self.japanese_text_display.setMinimumHeight(100)
+        # Detected language and text box
+        self.detected_label = QLabel("Detected Language:") 
+        self.detected_text_display = QTextEdit(self)
+        self.detected_text_display.setReadOnly(True)
+        self.detected_text_display.setMinimumHeight(100)
 
         # Translation text box
-        english_label = QLabel("Translation:")
-        self.english_text_display = QTextEdit(self)
-        self.english_text_display.setReadOnly(True)
-        self.english_text_display.setMinimumHeight(100)
+        translation_label = QLabel("Translation:")
+        self.translation_text_display = QTextEdit(self)
+        self.translation_text_display.setReadOnly(True)
+        self.translation_text_display.setMinimumHeight(100)
 
         # Add widgets to the grid
-        text_display_layout.addWidget(japanese_label, 0, 0)
-        text_display_layout.addWidget(self.japanese_text_display, 1, 0)
-        text_display_layout.addWidget(english_label, 3, 0)
-        text_display_layout.addWidget(self.english_text_display, 4, 0)
+        text_display_layout.addWidget(self.detected_label, 0, 0)
+        text_display_layout.addWidget(self.detected_text_display, 1, 0)
+        text_display_layout.addWidget(translation_label, 3, 0)
+        text_display_layout.addWidget(self.translation_text_display, 4, 0)
 
-        # Add a spacer item between Japanese and English sections
+        # Add a spacer item between detected and translation sections
         spacer_item = QtWidgets.QSpacerItem(20, 10, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed)
         text_display_layout.addItem(spacer_item, 2, 0)
 
@@ -423,6 +425,41 @@ class TranslatorApp(QtWidgets.QWidget):
         api_key_layout.addWidget(api_key_link)
 
         options_page_layout.addLayout(api_key_layout)
+
+        # Target Language Selection
+        target_language_layout = QtWidgets.QHBoxLayout()
+        target_language_label = QtWidgets.QLabel("Target Language:")
+        self.target_language_combo = QComboBox()
+        self.target_language_combo.addItems([
+            "Autodetect",
+            "Arabic",
+            "Bengali",
+            "Chinese (Simplified)",
+            "Chinese (Traditional)",
+            "Danish",
+            "Dutch",
+            "Finnish",
+            "French",
+            "German",
+            "Hindi",
+            "Italian",
+            "Japanese",
+            "Korean",
+            "Norwegian",
+            "Polish",
+            "Portuguese (Brazilian)",
+            "Portuguese (European)",
+            "Russian",
+            "Spanish",
+            "Swedish",
+            "Turkish"
+        ])
+        self.target_language_combo.setCurrentText(self.target_language)
+        self.target_language_combo.currentTextChanged.connect(self.update_target_language)
+        
+        target_language_layout.addWidget(target_language_label)
+        target_language_layout.addWidget(self.target_language_combo)
+        options_page_layout.addLayout(target_language_layout)
 
         # Add a stretch to push the back button to the bottom
         options_page_layout.addStretch(1)
@@ -560,14 +597,14 @@ class TranslatorApp(QtWidgets.QWidget):
         api_key = self.load_api_key()
         if not api_key:
             logging.error("No API key provided")
-            return "No API key provided", "No API key provided"
+            return "No API key provided", "No API key provided", "No API key provided"
         for attempt in range(MAX_RETRIES):
-            japanese_text, english_text = self.call_openai_api(image_bytes, api_key)
-            if not (japanese_text.startswith("API") and english_text.startswith("API")):
-                return japanese_text, english_text
+            detected_language, original_text, english_text = self.call_openai_api(image_bytes, api_key)
+            if not (detected_language.startswith("API") and original_text.startswith("API") and english_text.startswith("API")):
+                return detected_language, original_text, english_text
             logging.warning(f"API call failed. Attempt {attempt + 1} of {MAX_RETRIES}")
         logging.error("All API call attempts failed")
-        return "All API call attempts failed", "All API call attempts failed"
+        return "All API call attempts failed", "All API call attempts failed", "All API call attempts failed"
 
     def call_openai_api(self, image_bytes, api_key):
         try:
@@ -576,23 +613,26 @@ class TranslatorApp(QtWidgets.QWidget):
             image_data_url = f"data:image/png;base64,{base64_image}"
             logging.info("Image successfully encoded to base64.")
 
-            # Prepare the messages with image
+            # Prepare the messages with image and target language
+            target_language_prompt = f"The target language is {self.target_language}. " if self.target_language != "Autodetect" else ""
             messages = [
                 {
                     "type": "text",
-                    "text": """
-                    Please extract any Japanese text from the image and translate it into English. 
+                    "text": f"""
+                    {target_language_prompt}Please extract any text from the image, detect its language, and translate it into English. 
                     Provide your response in the following JSON format:
-                    {
-                        "japanese": "The original Japanese text",
-                        "english": "The English translation"
-                    }
-                    If there is no Japanese text in the image, or you are unable to translate it, 
+                    {{
+                        "detected_language": "The detected language",
+                        "original_text": "The original text in the detected language",
+                        "english_translation": "The English translation"
+                    }}
+                    If there is no text in the image, or you are unable to translate it, 
                     please respond with:
-                    {
-                        "japanese": "-Unable to extract-",
-                        "english": "-Unable to translate-"
-                    }
+                    {{
+                        "detected_language": "Unable to detect",
+                        "original_text": "-Unable to extract-",
+                        "english_translation": "-Unable to translate-"
+                    }}
                     """
                 },
                 {
@@ -637,43 +677,49 @@ class TranslatorApp(QtWidgets.QWidget):
                     # Parse the content as JSON
                     translation_data = json.loads(content)
                     logging.info("Received successful response from OpenAI API.")
-                    return translation_data.get('japanese', '-Unable to extract-'), translation_data.get('english', '-Unable to translate-')
+                    return (
+                        translation_data.get('detected_language', 'Unable to detect'),
+                        translation_data.get('original_text', '-Unable to extract-'),
+                        translation_data.get('english_translation', '-Unable to translate-')
+                    )
                 except json.JSONDecodeError as e:
                     logging.error(f"Failed to parse API response as JSON: {e}")
                     logging.error(f"Response content: {content}")
-                    return "API parsing error", "API parsing error"
+                    return "API parsing error", "API parsing error", "API parsing error"
                 except KeyError as e:
                     logging.error(f"Unexpected API response structure: {e}")
                     logging.error(f"Response content: {result}")
-                    return "API structure error", "API structure error"
+                    return "API structure error", "API structure error", "API structure error"
             else:
                 logging.error(f"API Error: {response.status_code}, {response.text}")
-                return f"APIエラー: {response.status_code}", f"API error: {response.status_code}"
+                return f"API error: {response.status_code}", f"API error: {response.status_code}", f"API error: {response.status_code}"
         except Exception as e:
             logging.exception("Exception occurred during API call.")
-            return "APIコールエラー", f"API call error: {str(e)}"
+            return f"API call error: {str(e)}", f"API call error: {str(e)}", f"API call error: {str(e)}"
 
     @QtCore.pyqtSlot()
     def show_error(self):
         QtWidgets.QMessageBox.critical(self, "Error", "Failed to get translation.")
 
-    @QtCore.pyqtSlot(str, str)
-    def update_translation_display(self, japanese_text, english_text):
+    @QtCore.pyqtSlot(str, str, str)
+    def update_translation_display(self, detected_language, original_text, translated_text):
         if self.translation_window:
-            self.translation_window.update_text(english_text)
+            self.translation_window.update_text(translated_text)
+        
+        # Update the detected language label
+        self.detected_label.setText(f"Detected Language: {detected_language}")
         
         # Update the text displays in the main window
-        if japanese_text.startswith("API") and english_text.startswith("API"):
-            # This is an error message
-            self.japanese_text_display.setText(japanese_text)
-            self.english_text_display.setText(english_text)
-        else:
-            self.japanese_text_display.setText(japanese_text)
-            self.english_text_display.setText(english_text)
+        self.detected_text_display.setText(original_text)
+        self.translation_text_display.setText(translated_text)
         
         # Log the displayed text for debugging
-        logging.debug(f"Displayed Japanese text: {japanese_text}")
-        logging.debug(f"Displayed English text: {english_text}")
+        logging.debug(f"Detected Language: {detected_language}")
+        logging.debug(f"Original Text: {original_text}")
+        logging.debug(f"Translated Text: {translated_text}")
+
+    def update_target_language(self, language):
+        self.target_language = language
 
 class TranslationDisplayWindow(QGraphicsView):
     def __init__(self, initial_text, rect, minimum_width, minimum_height):
