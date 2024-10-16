@@ -441,6 +441,7 @@ class TranslatorApp(QtWidgets.QWidget):
             "Finnish",
             "French",
             "German",
+            "Greek",
             "Hindi",
             "Italian",
             "Japanese",
